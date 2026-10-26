@@ -1,0 +1,69 @@
+{
+  "$schema": "./package.schema.json",
+  "name": "@jive-sh/server",
+  "description": "Jive's central server: the Convex backend that holds organizations, code repositories, connections and packages, and provisions packages for pipelines that sign in with their GitHub Actions ID token.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "jive:cicd:get-config": "jive-backend-convex cicd get-config",
+    "jive:cicd:build": "jive-backend-convex cicd build",
+    "jive:cicd:audit": "tsc --noEmit -p tsconfig.json && bun test",
+    "jive:cicd:deploy:plan": "jive-backend-convex cicd deploy-plan",
+    "jive:cicd:upload-artifacts": "jive-backend-convex cicd upload-artifacts",
+    "jive:cicd:deploy": "jive-backend-convex cicd deploy",
+    "dev": "jive-backend-convex dev"
+  },
+  "dependencies": {
+    "convex": "^1.48.0",
+    "effect": "^4.0.0",
+    "jive-connector-package-registry-npm": "^0.2.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "jive-abstract-backend-convex": "^0.2.1",
+    "typescript": "^5.9.3"
+  },
+  "jive": {
+    "cicd": {
+      "deploy": {
+        "verb": "Deploy to",
+        "branches": {
+          "main": [
+            "latest"
+          ]
+        },
+        "previews": false,
+        "sequentially": true
+      },
+      "runsOnPullRequests": true,
+      "runsOn": "ubuntu-latest",
+      "requiredSecrets": [
+        "CONVEX_TEAM_ACCESS_TOKEN"
+      ]
+    },
+    "backend-convex": {
+      "team": 551884,
+      "project": "jive-server",
+      "region": "aws-us-east-1",
+      "environments": {
+        "latest": {
+          "environmentVariables": {
+            "GITHUB_ACTIONS_JWKS": {
+              "value": "https://token.actions.githubusercontent.com/.well-known/jwks"
+            },
+            "CONNECTION_KEY": {
+              "generateOnce": {
+                "type": "randomBytes",
+                "bytes": 32,
+                "prefix": "1:"
+              }
+            }
+          },
+          "customDomains": []
+        }
+      },
+      "afterDeploy": null
+    }
+  }
+}

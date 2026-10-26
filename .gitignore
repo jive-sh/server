@@ -1,0 +1,7 @@
+node_modules
+dist
+.DS_Store
+package.schema.json
+# The anonymous local Convex deployment tests run against
+.convex
+.env.local
