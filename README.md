@@ -67,12 +67,27 @@ provisioning action opens one.
 ## Scaffolding
 
 Until `organizations.create`, `codeRepositories.provision` and `connections.create` exist, a person registers
-them with internal functions:
+them by hand.
+
+The organization and its repository, by GitHub's ids (none of it secret):
 
 ```sh
-bunx convex run seed:organizationWithRepository '{"organizationName":"…","repository":{"repositoryId":"…","repositoryOwnerId":"…","owner":"…","name":"…"}}'
-bunx convex run connections:connectNpm '{"organizationId":"…","token":"…","totpSecret":"…"}'
+bunx convex run seed:organizationWithRepository '{"organizationName":"…","repository":{"repositoryId":"…","repositoryOwnerId":"…","owner":"…","name":"…"}}' --deployment <deployment>
 ```
+
+The npm connection, so that neither the token nor the authenticator secret is ever on a command line or in shell
+history:
+
+```sh
+bun run connect-npm -- --deployment <deployment> --organization <organization>
+```
+
+It prompts for the npm access token and the authenticator setup secret (the base32 text, or the whole
+`otpauth://` URL from npm's QR code) without echoing either, and checks the token with npm's read-only
+`/-/whoami`; it never sends a one-time password to npm. It then has `convex run connections:openNpmConnectionRequest`
+issue a single-use request id, valid for 5 minutes and stored only as its SHA-256, and sends the credential with
+that id to the public action `connections:completeNpmConnection` in an HTTPS body. That action stores the credential
+sealed, replacing any npm connection the organization had, and spends the id.
 
 ## Verification
 
@@ -80,10 +95,13 @@ bunx convex run connections:connectNpm '{"organizationId":"…","token":"…","t
 
 - `test/model.test.ts`: the caller checks, the publisher decisions, sealing, and the provisioning flow against
   in-memory records and connector.
-- `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account), called
-  over HTTP with RS256 tokens shaped like GitHub's and signed by a key the test generates, against a fake npm
-  registry that demands a TOTP code: a new package, a repeated call changing nothing, a held claim, refusals, and
-  that the stored credential is sealed.
+- `test/connect-npm.test.ts`: reading the authenticator secret (base32 or `otpauth://` URL, refusing what the
+  connector can't use) and the prompts' line handling.
+- `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account); the npm
+  connection made by running `connect-npm` with its answers piped in; `packages:provision` called over HTTP with
+  RS256 tokens shaped like GitHub's and signed by a key the test generates, against a fake npm registry that
+  demands a TOTP code: a new package, a repeated call changing nothing, a held claim, refusals, a connection
+  request used twice, and that the stored credential is sealed.
 
 ## Not built yet
 

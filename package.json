@@ -12,7 +12,8 @@
     "jive:cicd:deploy:plan": "jive-backend-convex cicd deploy-plan",
     "jive:cicd:upload-artifacts": "jive-backend-convex cicd upload-artifacts",
     "jive:cicd:deploy": "jive-backend-convex cicd deploy",
-    "dev": "jive-backend-convex dev"
+    "dev": "jive-backend-convex dev",
+    "connect-npm": "bun scripts/connect-npm/main.ts"
   },
   "dependencies": {
     "convex": "^1.48.0",

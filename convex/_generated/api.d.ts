@@ -20,6 +20,14 @@ import type { GenericId as Id } from "convex/values";
  * ```
  */
 export declare const api: {
+  connections: {
+    completeNpmConnection: FunctionReference<
+      "action",
+      "public",
+      { requestId: string; token: string; totpSecret: string },
+      null
+    >;
+  };
   packages: {
     provision: FunctionReference<
       "action",
@@ -42,15 +50,17 @@ export declare const api: {
  */
 export declare const internal: {
   connections: {
-    connectNpm: FunctionReference<
+    openNpmConnectionRequest: FunctionReference<
       "action",
       "internal",
-      {
-        organizationId: Id<"organizations">;
-        token: string;
-        totpSecret: string;
-      },
-      null
+      { organizationName: string },
+      { deploymentUrl: string; requestId: string }
+    >;
+    redeemNpmConnectionRequest: FunctionReference<
+      "mutation",
+      "internal",
+      { requestHash: string },
+      null | Id<"organizations">
     >;
     replaceNpmConnection: FunctionReference<
       "mutation",
@@ -67,6 +77,12 @@ export declare const internal: {
       "internal",
       { organizationId: Id<"organizations"> },
       null | { keyVersion: number; sealedCredential: string }
+    >;
+    storeNpmConnectionRequest: FunctionReference<
+      "mutation",
+      "internal",
+      { organizationName: string; requestHash: string },
+      null
     >;
   };
   packages: {

@@ -24,6 +24,18 @@ export default defineSchema({
   }).index("by_organization_and_connector", ["organizationId", "connector"]),
 
   /**
+   * A person's single-use permission to store an organization's npm connection, issued by an internal action (so
+   * only a deployment admin gets one) and redeemed by `connections:completeNpmConnection`, which lets the
+   * credential travel in an HTTPS body instead of a command line. Only the SHA-256 of the id is stored.
+   */
+  connectionRequests: defineTable({
+    organizationId: v.id("organizations"),
+    connector: v.literal("npm"),
+    requestHash: v.string(),
+    expiresAt: v.number(),
+  }).index("by_request_hash", ["requestHash"]),
+
+  /**
    * A GitHub repository registered to an organization by its immutable ids, which is what lets its pipelines'
    * ID tokens in (§4, §6). `owner` and `name` are what npm's trusted publisher names; they can change on GitHub,
    * the ids cannot.

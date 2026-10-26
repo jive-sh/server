@@ -187,7 +187,21 @@ beforeAll(async () => {
   convexUrl = readFileSync(resolve(SERVER_DIR, ".env.local"), "utf8").match(/^CONVEX_URL=(.+)$/m)![1]!.trim();
 
   const seeded = JSON.parse(await convex(["run", "seed:organizationWithRepository", JSON.stringify({ organizationName: "jive-test", repository: REPOSITORY })]));
-  await convex(["run", "connections:connectNpm", JSON.stringify({ organizationId: seeded.organizationId, token: NPM_TOKEN, totpSecret: TOTP_SECRET })]);
+  expect(seeded.organizationId).toBeString();
+
+  // Connected the way a person does: `bun run connect-npm`, its two hidden answers piped in, checking the token
+  // against the fake registry's /-/whoami.
+  const connect = Bun.spawn(["bun", "run", "connect-npm", "--", "--organization", "jive-test", "--npm-registry", `http://127.0.0.1:${registry.port}`], {
+    cwd: SERVER_DIR, env: LOCAL_ENV, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  connect.stdin.write(`${NPM_TOKEN}\notpauth://totp/npm:jive-test-account?secret=${TOTP_SECRET.toLowerCase()}&issuer=npm\n`);
+  connect.stdin.end();
+  const [connectOut, connectErr, connectExit] = await Promise.all([new Response(connect.stdout).text(), new Response(connect.stderr).text(), connect.exited]);
+  expect(connectExit, connectErr).toBe(0);
+  expect(`${connectOut}${connectErr}`).toContain("The token belongs to npm user jive-test-account");
+  expect(`${connectOut}${connectErr}`).not.toContain(NPM_TOKEN);
+  expect(`${connectOut}${connectErr}`).not.toContain(TOTP_SECRET);
+  expect(npm.oneTimePasswords).toEqual([]);
 }, TIMEOUT);
 
 afterAll(async () => {
@@ -256,6 +270,17 @@ describe("provisioning", () => {
     })]);
     expect(await provision(await idToken({ repository_id: "900003", repository: "chaine-dance/impostor" })))
       .toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("provisioned for another code repository") } } });
+  }, TIMEOUT);
+
+  test("a connection request is spent by its first use", async () => {
+    const { requestId } = JSON.parse(await convex(["run", "connections:openNpmConnectionRequest", JSON.stringify({ organizationName: "jive-test" })]));
+    const complete = () => fetch(`${convexUrl}/api/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "connections:completeNpmConnection", args: { requestId, token: NPM_TOKEN, totpSecret: TOTP_SECRET }, format: "json" }),
+    }).then((response) => response.json());
+    expect(await complete()).toMatchObject({ status: "success" });
+    expect(await complete()).toMatchObject({ status: "error", errorMessage: expect.stringContaining("unknown, already used or expired") });
   }, TIMEOUT);
 
   test("the npm token and authenticator secret are stored sealed, never in the clear", async () => {

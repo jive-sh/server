@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["convex/**/*.ts", "test/**/*.ts"]
+  "include": ["convex/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
 }

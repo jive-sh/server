@@ -53,6 +53,30 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  connectionRequests: {
+    document: {
+      connector: "npm";
+      expiresAt: number;
+      organizationId: Id<"organizations">;
+      requestHash: string;
+      _id: Id<"connectionRequests">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "connector"
+      | "expiresAt"
+      | "organizationId"
+      | "requestHash";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_request_hash: ["requestHash", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   connections: {
     document: {
       connector: "npm";
