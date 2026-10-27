@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
-    "jive-abstract-backend-convex": "^0.2.1",
+    "jive-abstract-backend-convex": "^0.4.0",
     "typescript": "^5.9.3"
   },
   "jive": {
@@ -40,7 +40,7 @@
       "runsOnPullRequests": true,
       "runsOn": "ubuntu-latest",
       "requiredSecrets": [
-        "CONVEX_TEAM_ACCESS_TOKEN"
+        "CONVEX_DEPLOY_KEY"
       ]
     },
     "backend-convex": {
@@ -64,7 +64,10 @@
           "customDomains": []
         }
       },
-      "afterDeploy": null
+      "afterDeploy": null,
+      "provisionWithJive": {
+        "serverUrl": "https://adventurous-viper-740.convex.cloud"
+      }
     }
   }
 }

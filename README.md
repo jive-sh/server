@@ -107,5 +107,9 @@ sealed, replacing any npm connection the organization had, and spends the id.
 
 - The other resources' calls, people signing in, and a GitHub connection (design doc §3, §7).
 - `api.jive.sh` as the deployment's domain: it still serves `@jive-sh/app`'s Worker.
-- Deploying through this package's own pipeline: its first push to `main` deploys production and publishes its
-  client to npm, so it waits for that go-ahead.
+- Deploying through this package's own pipeline. Ready, not done: production is the deployment
+  `adventurous-viper-740` (project `jive-server`, reference `latest`), which the pipeline reaches with a production
+  deploy key (`CONVEX_DEPLOY_KEY`, the one GitHub secret, design doc §11) allowed only `deployment:deploy`,
+  `deployment:env:view`, `deployment:env:write` and the `runInternal*` actions; and the client publish asks that
+  same deployment's `packages:provision` first (`backend-convex.provisionWithJive`), so no `NPM_TOKEN` is needed.
+  The first push to `main` waits until the test package has gone end to end.
