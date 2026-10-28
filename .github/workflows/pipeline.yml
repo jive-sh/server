@@ -1,0 +1,22 @@
+name: CI/CD Pipeline
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+# A reusable workflow can only reduce the caller's permissions; the deploy job needs id-token:write for npm
+# trusted publishing, so the caller grants it here.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  pipeline:
+    name: Pipeline
+    uses: jive-sh/jive/.github/workflows/reusable-pipeline.yml@main
+    secrets: inherit
