@@ -12,7 +12,15 @@ import { resolve } from "node:path";
  */
 
 const SERVER_DIR = resolve(import.meta.dir, "..");
-const LOCAL_ENV = { ...process.env, CONVEX_AGENT_MODE: "anonymous" };
+/**
+ * The environment of every Convex CLI this test starts: this process's without any `CONVEX_*` variable, because a
+ * deploy key or deployment named there outranks anonymous mode, and the pipeline's build job holds the production
+ * deployment's `CONVEX_DEPLOY_KEY`.
+ */
+const LOCAL_ENV = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("CONVEX_"))),
+  CONVEX_AGENT_MODE: "anonymous",
+};
 const TIMEOUT = 3 * 60 * 1000;
 const ISSUER = "https://token.actions.githubusercontent.com";
 const AUDIENCE = "https://api.jive.sh";
@@ -34,6 +42,21 @@ async function convex(args: ReadonlyArray<string>) {
   const result = await run(["bunx", "convex", ...args]);
   expect(result.exitCode, `convex ${args[0]}: ${result.stderr}`).toBe(0);
   return result.stdout;
+}
+
+/**
+ * The URL of the deployment the Convex CLI acts on here, read from the `.env.local` it selects by when no `CONVEX_*`
+ * variable is set. Throws unless that is an anonymous backend on this machine, so the test writes its keys and
+ * rows nowhere else.
+ */
+function localDeploymentUrl(): string {
+  const envLocal = readFileSync(resolve(SERVER_DIR, ".env.local"), "utf8");
+  const deployment = envLocal.match(/^CONVEX_DEPLOYMENT=(.*)$/m)?.[1]?.trim() ?? "(none)";
+  const url = envLocal.match(/^CONVEX_URL=(.*)$/m)?.[1]?.trim() ?? "(none)";
+  if (!deployment.startsWith("anonymous:") || !url.startsWith("http://127.0.0.1:")) {
+    throw new Error(`refusing to run against ${deployment} at ${url}: this test only acts on an anonymous local deployment`);
+  }
+  return url;
 }
 
 function base64Url(bytes: Uint8Array | string): string {
@@ -159,6 +182,7 @@ beforeAll(async () => {
   });
 
   await convex(["init"]);
+  localDeploymentUrl();
   await convex(["env", "set", "GITHUB_ACTIONS_JWKS", `data:text/plain;charset=utf-8;base64,${Buffer.from(jwks).toString("base64")}`]);
   await convex(["env", "set", "CONNECTION_KEY", CONNECTION_KEY]);
   await convex(["env", "set", "NPM_REGISTRY_URL", `http://127.0.0.1:${registry.port}`]);
@@ -184,7 +208,7 @@ beforeAll(async () => {
     throw new Error(`convex dev stopped before the functions were ready:\n${printed}`);
   })();
   await Promise.race([ready, Bun.sleep(TIMEOUT - 30_000).then(() => { throw new Error(`convex dev did not get ready:\n${printed}`); })]);
-  convexUrl = readFileSync(resolve(SERVER_DIR, ".env.local"), "utf8").match(/^CONVEX_URL=(.+)$/m)![1]!.trim();
+  convexUrl = localDeploymentUrl();
 
   const seeded = JSON.parse(await convex(["run", "seed:organizationWithRepository", JSON.stringify({ organizationName: "jive-test", repository: REPOSITORY })]));
   expect(seeded.organizationId).toBeString();
