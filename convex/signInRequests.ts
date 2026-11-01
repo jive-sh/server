@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { internal } from "./_generated/api";
 import { action, internalMutation, query } from "./_generated/server";
 import { insertAccountSession } from "./model/sessions";
-import { SIGN_IN_REQUEST_MS, drawConfirmationCode } from "./model/signInRequests";
+import { SIGN_IN_REQUEST_MS } from "./model/signInRequests";
 import { CLAIM_SECRET_PREFIX, SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
 import { relyingPartyOf } from "./model/webAuthn";
 
@@ -12,9 +12,9 @@ import { relyingPartyOf } from "./model/webAuthn";
  * page of its own:
  *
  * 1. The program calls `open` and keeps the claim secret, which only it ever holds.
- * 2. The person opens `loginUrl` (`https://jive.sh/login?request=<id>`), checks the confirmation code matches the
- *    one the program shows, and signs in or registers with a passkey; that ceremony approves the request
- *    (`auth.ts`).
+ * 2. The person opens `loginUrl` (`https://jive.sh/login?request=<id>`) and signs in or registers with a passkey;
+ *    that ceremony approves the request (`auth.ts`). There is no code to compare (Alex, 2026-11-01: "a human just
+ *    signs in with the passkey. none of this code bullshit").
  * 3. The program calls `claim` with the claim secret until it answers `approved`, with a session token of the
  *    program's own; a request is claimed once.
  *
@@ -24,21 +24,19 @@ import { relyingPartyOf } from "./model/webAuthn";
 
 export const open = action({
   args: {},
-  returns: v.object({ requestId: v.string(), claimSecret: v.string(), confirmationCode: v.string(), loginUrl: v.string(), expiresAt: v.number() }),
+  returns: v.object({ requestId: v.string(), claimSecret: v.string(), loginUrl: v.string(), expiresAt: v.number() }),
   handler: async (ctx) => {
     const relyingParty = await Effect.runPromise(relyingPartyOf(process.env.WEBSITE_DOMAIN));
     const claimSecret = mintSecret(CLAIM_SECRET_PREFIX);
-    const confirmationCode = drawConfirmationCode();
     const { requestId, expiresAt } = await ctx.runMutation(internal.signInRequests.store, {
       claimSecretHash: await sha256Hex(claimSecret),
-      confirmationCode,
     });
-    return { requestId, claimSecret, confirmationCode, loginUrl: `${relyingParty.origin}/login?request=${requestId}`, expiresAt };
+    return { requestId, claimSecret, loginUrl: `${relyingParty.origin}/login?request=${requestId}`, expiresAt };
   },
 });
 
 export const store = internalMutation({
-  args: { claimSecretHash: v.string(), confirmationCode: v.string() },
+  args: { claimSecretHash: v.string() },
   returns: v.object({ requestId: v.string(), expiresAt: v.number() }),
   handler: async (ctx, args) => {
     const expiresAt = Date.now() + SIGN_IN_REQUEST_MS;
@@ -58,15 +56,15 @@ export const deleteRequest = internalMutation({
   },
 });
 
-/** What the login page shows before the person approves: the code to compare, and whether it is still pending. */
+/** Whether the request the login page names is still pending; null when it is unknown, expired or claimed. */
 export const describe = query({
   args: { requestId: v.string() },
-  returns: v.union(v.null(), v.object({ confirmationCode: v.string(), status: v.union(v.literal("pending"), v.literal("approved")) })),
+  returns: v.union(v.null(), v.object({ status: v.union(v.literal("pending"), v.literal("approved")) })),
   handler: async (ctx, { requestId }) => {
     const id = ctx.db.normalizeId("signInRequests", requestId);
     const request = id === null ? null : await ctx.db.get(id);
     if (request === null || request.claimedAt !== undefined || request.expiresAt <= Date.now()) return null;
-    return { confirmationCode: request.confirmationCode, status: request.approvedAccountId === undefined ? "pending" : "approved" } as const;
+    return { status: request.approvedAccountId === undefined ? "pending" : "approved" } as const;
   },
 });
 

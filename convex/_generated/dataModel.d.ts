@@ -215,7 +215,6 @@ export type DataModel = {
       approvedAccountId?: Id<"accounts">;
       claimSecretHash: string;
       claimedAt?: number;
-      confirmationCode: string;
       expiresAt: number;
       _id: Id<"signInRequests">;
       _creationTime: number;
@@ -226,7 +225,6 @@ export type DataModel = {
       | "approvedAccountId"
       | "claimedAt"
       | "claimSecretHash"
-      | "confirmationCode"
       | "expiresAt";
     indexes: {
       by_id: ["_id"];

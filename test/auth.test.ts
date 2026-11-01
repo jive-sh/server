@@ -115,7 +115,8 @@ describe("a program signing in through a sign-in request", () => {
     expect(request.loginUrl).toBe(`https://jive.sh/login?request=${request.requestId}`);
     expect(request.claimSecret).toStartWith("jive_claim_");
     expect(await client.query(api.signInRequests.describe, { requestId: request.requestId }))
-      .toEqual({ confirmationCode: request.confirmationCode, status: "pending" });
+      .toEqual({ status: "pending" });
+    expect(Object.keys(request).sort()).toEqual(["claimSecret", "expiresAt", "loginUrl", "requestId"]);
     expect(await client.action(api.signInRequests.claim, { requestId: request.requestId, claimSecret: request.claimSecret }))
       .toEqual({ status: "pending" });
 

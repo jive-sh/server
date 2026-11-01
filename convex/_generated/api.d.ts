@@ -162,7 +162,7 @@ export declare const api: {
       "query",
       "public",
       { requestId: string },
-      null | { confirmationCode: string; status: "pending" | "approved" }
+      null | { status: "pending" | "approved" }
     >;
     open: FunctionReference<
       "action",
@@ -170,7 +170,6 @@ export declare const api: {
       {},
       {
         claimSecret: string;
-        confirmationCode: string;
         expiresAt: number;
         loginUrl: string;
         requestId: string;
@@ -402,7 +401,7 @@ export declare const internal: {
     store: FunctionReference<
       "mutation",
       "internal",
-      { claimSecretHash: string; confirmationCode: string },
+      { claimSecretHash: string },
       { expiresAt: number; requestId: string }
     >;
   };

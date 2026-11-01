@@ -86,11 +86,10 @@ export default defineSchema({
   /**
    * A program on a person's machine waiting to be signed in: it opens the request and keeps the claim secret
    * (stored as its SHA-256), the person approves it on `jive.sh/login?request=<id>` with a passkey, and the
-   * program claims a session of its own. `confirmationCode` is shown by both the program and the page.
+   * program claims a session of its own.
    */
   signInRequests: defineTable({
     claimSecretHash: v.string(),
-    confirmationCode: v.string(),
     approvedAccountId: v.optional(v.id("accounts")),
     claimedAt: v.optional(v.number()),
     expiresAt: v.number(),

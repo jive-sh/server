@@ -44,9 +44,10 @@ its account and passkey.
 | `signInRequests:open`, `:describe`, `:claim` | action, query, action | Sign a program in (below) |
 
 **A program signs in through a sign-in request**, since it holds no passkey: it calls `signInRequests:open` and keeps
-the claim secret; the person opens the `loginUrl` it returns (`https://jive.sh/login?request=<id>`), checks the
-confirmation code matches, and signs in or registers there, which approves the request; the program then calls
-`signInRequests:claim` until it answers `approved` with a session token of its own. A request lasts 10 minutes and
+the claim secret; the person opens the `loginUrl` it returns (`https://jive.sh/login?request=<id>`) and signs in or
+registers there with a passkey, which approves the request; the program then calls `signInRequests:claim` until it
+answers `approved` with a session token of its own. There is no confirmation code (Alex, 2026-11-01: "a human just
+signs in with the passkey. none of this code bullshit"). A request lasts 10 minutes and
 is claimed once. All of it is plain Convex, so a program calls it with `ConvexHttpClient` or
 `POST <deployment>/api/action`.
 

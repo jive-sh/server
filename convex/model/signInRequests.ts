@@ -5,15 +5,6 @@ import type { MutationCtx } from "../_generated/server";
 /** How long a program's sign-in request can be approved and claimed. */
 export const SIGN_IN_REQUEST_MS = 10 * 60 * 1000;
 
-/** Crockford's base32 without I, L, O and U, so a code read aloud or retyped can't be misread. */
-const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-/** `XXXX-XXXX`, random; needs real randomness, so it is drawn in an action. */
-export function drawConfirmationCode(): string {
-  const characters = [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]);
-  return `${characters.slice(0, 4).join("")}-${characters.slice(4).join("")}`;
-}
-
 export const UNUSABLE_SIGN_IN_REQUEST = "This sign-in request has expired or was already used. Start again from the program that opened it.";
 
 /**
