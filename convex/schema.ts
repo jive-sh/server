@@ -30,12 +30,14 @@ export default defineSchema({
 
   /**
    * A single-use WebAuthn challenge, stored as its SHA-256. A registration challenge carries the user handle and
-   * username its options were issued for, so the account created is the one the passkey was made for.
+   * username its options were issued for, so the account created is the one the passkey was made for. An
+   * `addPasskey` challenge carries the account a signed-in session is adding a passkey to.
    */
   webAuthnChallenges: defineTable({
     challengeHash: v.string(),
-    purpose: v.union(v.literal("registration"), v.literal("signIn")),
+    purpose: v.union(v.literal("registration"), v.literal("signIn"), v.literal("addPasskey")),
     registration: v.optional(v.object({ webAuthnUserId: v.string(), username: v.string() })),
+    accountId: v.optional(v.id("accounts")),
     expiresAt: v.number(),
   }).index("by_challenge_hash", ["challengeHash"]),
 

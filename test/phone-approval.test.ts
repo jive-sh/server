@@ -215,3 +215,49 @@ describe("phone approval of a program's sign-in", () => {
     expect(await client.query(api.approvalDevices.list, { sessionToken: "jive_unknown" })).toBeNull();
   }, TIMEOUT);
 });
+
+describe("adding a phone whose platform does not sync the account's passkey", () => {
+  async function addPasskey(sessionToken: string, passkey: SoftwarePasskey, origin: string) {
+    const { options } = await client.action(api.auth.addPasskeyOptions, { sessionToken });
+    const response = await passkey.register(options, origin);
+    await client.action(api.auth.addPasskey, { sessionToken, challenge: options.challenge, response });
+  }
+
+  test("the desktop approves a request whose claim the phone redeems, and the phone adds a passkey it then signs in with", async () => {
+    const desktopPasskey = await createSoftwarePasskey("jive.sh");
+    const desktop = await registerAccount(client, desktopPasskey);
+
+    // "Add a phone" on the website: a request the desktop's passkey approves, whose claim secret the phone scans.
+    const request = await client.action(api.signInRequests.open, {});
+    await signIn(desktopPasskey, { signInRequestId: request.requestId });
+    const claimed = await client.action(api.signInRequests.claim, { requestId: request.requestId, claimSecret: request.claimSecret });
+    if (claimed.status !== "approved") throw new Error(`claim answered ${claimed.status}`);
+
+    const phonePasskey = await createSoftwarePasskey("jive.sh");
+    await addPasskey(claimed.sessionToken, phonePasskey, APP_ORIGIN);
+    const me = await client.query(api.accounts.me, { sessionToken: desktop.sessionToken });
+    expect(me?.passkeys).toHaveLength(2);
+    expect((await signIn(phonePasskey, { origin: APP_ORIGIN })).username).toBe(desktop.username);
+  }, TIMEOUT);
+
+  test("options issued to one account cannot be spent by another account's session, and an ended session gets none", async () => {
+    const owner = await registerAccount(client, await createSoftwarePasskey("jive.sh"));
+    const stranger = await registerAccount(client, await createSoftwarePasskey("jive.sh"));
+    const { options } = await client.action(api.auth.addPasskeyOptions, { sessionToken: owner.sessionToken });
+    const response = await (await createSoftwarePasskey("jive.sh")).register(options, APP_ORIGIN);
+    expect(await refusal(client.action(api.auth.addPasskey, { sessionToken: stranger.sessionToken, challenge: options.challenge, response })))
+      .toContain("Sign in again");
+    expect(await client.query(api.accounts.me, { sessionToken: owner.sessionToken })).toMatchObject({ passkeys: [{}] });
+    expect(await refusal(client.action(api.auth.addPasskeyOptions, { sessionToken: "jive_unknown" }))).toContain("Sign in again");
+  }, TIMEOUT);
+
+  test("the new passkey carries the account's own user handle and excludes its existing passkeys", async () => {
+    const passkey = await createSoftwarePasskey("jive.sh");
+    const opened = await registerAccount(client, passkey);
+    const { options: registration } = await client.action(api.auth.registrationOptions, {});
+    const { options } = await client.action(api.auth.addPasskeyOptions, { sessionToken: opened.sessionToken });
+    expect(options.user.name).toBe(opened.username);
+    expect(options.user.id).not.toBe(registration.user.id);
+    expect(options.excludeCredentials).toEqual([expect.objectContaining({ id: passkey.credentialId })]);
+  }, TIMEOUT);
+});

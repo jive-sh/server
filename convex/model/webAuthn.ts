@@ -58,16 +58,23 @@ export function registrationOptions(input: {
   readonly challenge: string;
   readonly webAuthnUserId: string;
   readonly username: string;
+  /** Passkeys the account already has, so an authenticator holding one of them does not make a second. */
+  readonly excludeCredentialIds?: ReadonlyArray<string>;
 }): Effect.Effect<PublicKeyCredentialCreationOptionsJSON> {
-  return Effect.promise(() => generateRegistrationOptions({
-    rpID: input.relyingParty.id,
-    rpName: "Jive",
-    userName: input.username,
-    userID: new TextEncoder().encode(input.webAuthnUserId),
-    challenge: fromBase64Url(input.challenge),
-    attestationType: "none",
-    authenticatorSelection: { residentKey: "required", userVerification: "required" },
-  }));
+  return Effect.map(
+    Effect.promise(() => generateRegistrationOptions({
+      rpID: input.relyingParty.id,
+      rpName: "Jive",
+      userName: input.username,
+      userID: new TextEncoder().encode(input.webAuthnUserId),
+      challenge: fromBase64Url(input.challenge),
+      attestationType: "none",
+      authenticatorSelection: { residentKey: "required", userVerification: "required" },
+      excludeCredentials: (input.excludeCredentialIds ?? []).map((id) => ({ id })),
+    })),
+    // Undefined fields (`extensions`) are refused by Convex's return validation; JSON drops them anyway.
+    (options) => JSON.parse(JSON.stringify(options)) as PublicKeyCredentialCreationOptionsJSON,
+  );
 }
 
 export function verifyRegistration(input: {

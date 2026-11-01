@@ -288,9 +288,10 @@ export type DataModel = {
   };
   webAuthnChallenges: {
     document: {
+      accountId?: Id<"accounts">;
       challengeHash: string;
       expiresAt: number;
-      purpose: "registration" | "signIn";
+      purpose: "registration" | "signIn" | "addPasskey";
       registration?: { username: string; webAuthnUserId: string };
       _id: Id<"webAuthnChallenges">;
       _creationTime: number;
@@ -298,6 +299,7 @@ export type DataModel = {
     fieldPaths:
       | "_creationTime"
       | "_id"
+      | "accountId"
       | "challengeHash"
       | "expiresAt"
       | "purpose"

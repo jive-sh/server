@@ -43,6 +43,7 @@ its account and passkey.
 | --- | --- | --- |
 | `auth:registrationOptions`, `auth:register` | actions | Create an account (handle derived from a random WebAuthn user id) and its passkey; opens a session |
 | `auth:signInOptions`, `auth:signIn` | actions | Usernameless sign-in with any registered passkey; opens a session |
+| `auth:addPasskeyOptions`, `auth:addPasskey` | actions | Add a passkey to the signed-in account, with its own WebAuthn user handle, its existing passkeys excluded (a phone whose platform does not sync the account's passkey) |
 | `accounts:me` | query | The session's account and passkeys, or null |
 | `sessions:signOut` | mutation | Revokes the presented session |
 | `signInRequests:open`, `:describe`, `:claim` | action, query, action | Sign a program in (below) |

@@ -6,7 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { allowedOrigins } from "./model/androidApps";
 import { usernameFor } from "./model/naming";
-import { insertAccountSession } from "./model/sessions";
+import { insertAccountSession, resolveSession } from "./model/sessions";
 import { approveSignInRequest } from "./model/signInRequests";
 import { SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
 import {
@@ -33,6 +33,7 @@ import {
 const CHALLENGE_MS = 5 * 60 * 1000;
 
 const sessionOpened = v.object({ sessionToken: v.string(), expiresAt: v.number(), username: v.string() });
+const challengePurpose = v.union(v.literal("registration"), v.literal("signIn"), v.literal("addPasskey"));
 
 /** Runs a model effect, turning a failed ceremony into a ConvexError whose message the page shows. */
 async function run<A>(effect: Effect.Effect<A, CeremonyFailed | WebsiteDomainMissing>): Promise<A> {
@@ -122,6 +123,79 @@ export const signIn = action({
   },
 });
 
+/**
+ * Options for adding a passkey to the signed-in account, such as one on a phone whose platform does not sync the
+ * account's existing passkey (an iCloud Keychain passkey and an Android phone). The new passkey gets the account's
+ * own WebAuthn user handle, and the account's passkeys are excluded, so an authenticator holding one adds nothing.
+ */
+export const addPasskeyOptions = action({
+  args: { sessionToken: v.string() },
+  returns: v.object({ options: v.any() }),
+  handler: async (ctx, { sessionToken }) => {
+    const party = await relyingParty();
+    const account = await ctx.runQuery(internal.auth.accountOfSession, { sessionToken });
+    if (account === null) throw new ConvexError("Sign in again: this session has expired or was signed out.");
+    const challenge = mintSecret("");
+    await ctx.runMutation(internal.auth.storeChallenge, { challengeHash: await sha256Hex(challenge), purpose: "addPasskey", accountId: account.accountId });
+    return {
+      options: await run(creationOptions({
+        relyingParty: party,
+        challenge,
+        webAuthnUserId: account.webAuthnUserId,
+        username: account.username,
+        excludeCredentialIds: account.credentialIds,
+      })),
+    };
+  },
+});
+
+/** Records the passkey the authenticator made for `addPasskeyOptions`, on the account that asked for it. */
+export const addPasskey = action({
+  args: { sessionToken: v.string(), challenge: v.string(), response: v.any() },
+  returns: v.null(),
+  handler: async (ctx, { sessionToken, challenge, response }) => {
+    const party = await relyingParty();
+    const spent = await ctx.runMutation(internal.auth.spendChallenge, { challengeHash: await sha256Hex(challenge), purpose: "addPasskey" });
+    if (spent === null || spent.accountId === undefined) throw new ConvexError("This passkey prompt expired. Try again.");
+    const account = await ctx.runQuery(internal.auth.accountOfSession, { sessionToken });
+    // The options were issued to one account; a different or ended session cannot spend them.
+    if (account === null || account.accountId !== spent.accountId) throw new ConvexError("Sign in again: this session has expired or was signed out.");
+    const expectedOrigins = await run(allowedOrigins({ relyingParty: party, response }));
+    const passkey = await run(verifyRegistration({ relyingParty: party, expectedOrigins, challenge, response: response as RegistrationResponseJSON }));
+    await ctx.runMutation(internal.auth.attachPasskey, { accountId: account.accountId, ...passkey });
+    return null;
+  },
+});
+
+export const accountOfSession = internalQuery({
+  args: { sessionToken: v.string() },
+  returns: v.union(v.null(), v.object({
+    accountId: v.id("accounts"),
+    username: v.string(),
+    webAuthnUserId: v.string(),
+    credentialIds: v.array(v.string()),
+  })),
+  handler: async (ctx, { sessionToken }) => {
+    const session = await resolveSession(ctx.db, sessionToken);
+    const account = session === null ? null : await ctx.db.get(session.accountId);
+    if (account === null) return null;
+    const passkeys = await ctx.db.query("passkeys").withIndex("by_account", (q) => q.eq("accountId", account._id)).collect();
+    return { accountId: account._id, username: account.username, webAuthnUserId: account.webAuthnUserId, credentialIds: passkeys.map((row) => row.credentialId) };
+  },
+});
+
+export const attachPasskey = internalMutation({
+  args: { accountId: v.id("accounts"), credentialId: v.string(), publicKey: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { accountId, credentialId, publicKey }) => {
+    if (await ctx.db.query("passkeys").withIndex("by_credential_id", (q) => q.eq("credentialId", credentialId)).first() !== null) {
+      throw new ConvexError("That passkey is already registered.");
+    }
+    await ctx.db.insert("passkeys", { accountId, credentialId, publicKey, createdAt: Date.now() });
+    return null;
+  },
+});
+
 export const usernameTaken = internalQuery({
   args: { username: v.string() },
   returns: v.boolean(),
@@ -132,8 +206,9 @@ export const usernameTaken = internalQuery({
 export const storeChallenge = internalMutation({
   args: {
     challengeHash: v.string(),
-    purpose: v.union(v.literal("registration"), v.literal("signIn")),
+    purpose: challengePurpose,
     registration: v.optional(v.object({ webAuthnUserId: v.string(), username: v.string() })),
+    accountId: v.optional(v.id("accounts")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
@@ -158,14 +233,20 @@ export const deleteChallenge = internalMutation({
  * unexpired and issued for this purpose.
  */
 export const spendChallenge = internalMutation({
-  args: { challengeHash: v.string(), purpose: v.union(v.literal("registration"), v.literal("signIn")) },
-  returns: v.union(v.null(), v.object({ registration: v.optional(v.object({ webAuthnUserId: v.string(), username: v.string() })) })),
+  args: { challengeHash: v.string(), purpose: challengePurpose },
+  returns: v.union(v.null(), v.object({
+    registration: v.optional(v.object({ webAuthnUserId: v.string(), username: v.string() })),
+    accountId: v.optional(v.id("accounts")),
+  })),
   handler: async (ctx, { challengeHash, purpose }) => {
     const challenge = await ctx.db.query("webAuthnChallenges").withIndex("by_challenge_hash", (q) => q.eq("challengeHash", challengeHash)).unique();
     if (challenge === null) return null;
     await ctx.db.delete(challenge._id);
     if (challenge.expiresAt <= Date.now() || challenge.purpose !== purpose) return null;
-    return challenge.registration === undefined ? {} : { registration: challenge.registration };
+    return {
+      ...(challenge.registration === undefined ? {} : { registration: challenge.registration }),
+      ...(challenge.accountId === undefined ? {} : { accountId: challenge.accountId }),
+    };
   },
 });
 

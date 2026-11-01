@@ -53,6 +53,18 @@ export declare const api: {
     >;
   };
   auth: {
+    addPasskey: FunctionReference<
+      "action",
+      "public",
+      { challenge: string; response: any; sessionToken: string },
+      null
+    >;
+    addPasskeyOptions: FunctionReference<
+      "action",
+      "public",
+      { sessionToken: string },
+      { options: any }
+    >;
     register: FunctionReference<
       "action",
       "public",
@@ -249,6 +261,23 @@ export declare const internal: {
     >;
   };
   auth: {
+    accountOfSession: FunctionReference<
+      "query",
+      "internal",
+      { sessionToken: string },
+      null | {
+        accountId: Id<"accounts">;
+        credentialIds: Array<string>;
+        username: string;
+        webAuthnUserId: string;
+      }
+    >;
+    attachPasskey: FunctionReference<
+      "mutation",
+      "internal",
+      { accountId: Id<"accounts">; credentialId: string; publicKey: string },
+      null
+    >;
     createAccount: FunctionReference<
       "mutation",
       "internal",
@@ -291,15 +320,22 @@ export declare const internal: {
     spendChallenge: FunctionReference<
       "mutation",
       "internal",
-      { challengeHash: string; purpose: "registration" | "signIn" },
-      null | { registration?: { username: string; webAuthnUserId: string } }
+      {
+        challengeHash: string;
+        purpose: "registration" | "signIn" | "addPasskey";
+      },
+      null | {
+        accountId?: Id<"accounts">;
+        registration?: { username: string; webAuthnUserId: string };
+      }
     >;
     storeChallenge: FunctionReference<
       "mutation",
       "internal",
       {
+        accountId?: Id<"accounts">;
         challengeHash: string;
-        purpose: "registration" | "signIn";
+        purpose: "registration" | "signIn" | "addPasskey";
         registration?: { username: string; webAuthnUserId: string };
       },
       null
