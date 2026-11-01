@@ -1,10 +1,12 @@
-import { Effect, Option, Schema, SchemaIssue, pipe } from "effect";
+import { Data, Effect, Option, Schema, SchemaIssue, pipe } from "effect";
 import { GITHUB_ACTIONS_ISSUER } from "./githubActions";
-import { ProvisionRefused } from "./provisioning";
+
+/** The job may not sign in, with a reason its log shows. */
+export class PipelineSignInRefused extends Data.TaggedError("PipelineSignInRefused")<{ readonly reason: string }> {}
 
 /**
  * The GitHub Actions job calling Jive, read from its verified ID token. Convex checked the signature, issuer and
- * audience before the function ran; this decides whether the job may provision (design doc §6, Alex's direction:
+ * audience before the function ran; this decides whether the job may sign in for a pipeline session (design doc §6, Alex's direction:
  * "the ID token includes things like the environment... some kind of protected branches setup").
  */
 export interface PipelineCaller {
@@ -19,7 +21,7 @@ export interface PipelineCaller {
   readonly workflowFile: string;
 }
 
-/** The only workflow file Jive provisions for: npm matches the calling workflow, and every Jive package's is this. */
+/** The only workflow file Jive signs in: npm matches the calling workflow, and every Jive package's is this. */
 export const PIPELINE_WORKFLOW_FILE = "pipeline.yml";
 
 /**
@@ -49,40 +51,40 @@ function workflowFileOf(workflowRef: string): Option.Option<string> {
 }
 
 /**
- * Decodes the caller's identity and refuses a job that may not provision: one without an environment, on an
+ * Decodes the caller's identity and refuses a job that may not sign in: one without an environment, on an
  * unprotected ref, from a pull request or anything but a push or a manual run, from a workflow other than
  * `pipeline.yml`, or on a self-hosted runner (npm refuses those trusted publishes anyway). Every reason names
  * what to change; none repeats the token.
  */
-export function authorizePipelineCaller(identity: unknown): Effect.Effect<PipelineCaller, ProvisionRefused> {
+export function authorizePipelineCaller(identity: unknown): Effect.Effect<PipelineCaller, PipelineSignInRefused> {
   return Effect.gen(function* () {
     const claims = yield* pipe(
       Schema.decodeUnknownEffect(GithubActionsClaims)(identity),
-      Effect.mapError((e) => new ProvisionRefused({
+      Effect.mapError((e) => new PipelineSignInRefused({
         reason: `the caller is not a GitHub Actions job Jive can identify: ${formatIssue(e.issue)}`,
       })),
     );
     const [owner, name, ...rest] = claims.repository.split("/");
     if (!owner || !name || rest.length > 0) {
-      return yield* new ProvisionRefused({ reason: `the token's repository claim "${claims.repository}" is not owner/name` });
+      return yield* new PipelineSignInRefused({ reason: `the token's repository claim "${claims.repository}" is not owner/name` });
     }
     const maybeWorkflowFile = workflowFileOf(claims.workflow_ref);
     if (Option.isNone(maybeWorkflowFile) || maybeWorkflowFile.value !== PIPELINE_WORKFLOW_FILE) {
-      return yield* new ProvisionRefused({
-        reason: `only .github/workflows/${PIPELINE_WORKFLOW_FILE} may provision packages; this job runs ${claims.workflow_ref}`,
+      return yield* new PipelineSignInRefused({
+        reason: `only .github/workflows/${PIPELINE_WORKFLOW_FILE} may sign in; this job runs ${claims.workflow_ref}`,
       });
     }
     if (claims.environment === undefined) {
-      return yield* new ProvisionRefused({ reason: "the job runs in no GitHub Actions environment; a deploy job names the environment it publishes to" });
+      return yield* new PipelineSignInRefused({ reason: "the job runs in no GitHub Actions environment; a deploy job names the environment it publishes to" });
     }
     if (claims.event_name !== "push" && claims.event_name !== "workflow_dispatch") {
-      return yield* new ProvisionRefused({ reason: `a ${claims.event_name} run may not provision; only push and workflow_dispatch may` });
+      return yield* new PipelineSignInRefused({ reason: `a ${claims.event_name} run may not sign in; only push and workflow_dispatch may` });
     }
     if (claims.ref_protected !== true && claims.ref_protected !== "true") {
-      return yield* new ProvisionRefused({ reason: "the job runs on an unprotected branch or tag; protect it on GitHub to let it provision" });
+      return yield* new PipelineSignInRefused({ reason: "the job runs on an unprotected branch or tag; protect it on GitHub to let it sign in" });
     }
     if (claims.runner_environment !== "github-hosted") {
-      return yield* new ProvisionRefused({ reason: "the job runs on a self-hosted runner, which npm's trusted publishing refuses" });
+      return yield* new PipelineSignInRefused({ reason: "the job runs on a self-hosted runner, which npm's trusted publishing refuses" });
     }
     return {
       repositoryId: claims.repository_id,

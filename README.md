@@ -8,15 +8,27 @@ push the functions and publish the generated client. Design: the Jive API v1 des
 
 So far it does three things: **people sign in** with their `jive.sh` passkey and act through sessions, which a
 browser or a program (a CLI, the Jive daemon) holds alike; it **signs with each account's SSH key**, which it holds so
-no client has to; and **`packages:provision`**, which a pipeline's deploy job calls right before it publishes a
-package to npm.
+no client has to; and **`packages:provision`**, which a pipeline's deploy job calls, with the session it signed in
+for, right before it publishes a package to npm.
 
 ## Signing in, and sessions
 
-Every call that acts for a person takes a **session token** (`jive_…`) as its `sessionToken` argument and nothing
-else (Alex, 2026-10-28: "There's a session token. That's it"). A token is returned once, when its session opens;
-only its SHA-256 is stored. A session lasts 12 hours and stops at once when revoked. `convex/model/sessions.ts`'s
-`resolveSession` is the one check every such function starts with.
+Every Jive call takes a **session token** (`jive_…`) as its `sessionToken` argument and nothing else (Alex,
+2026-10-28: "There's a session token. That's it"). A token is returned once, when its session opens; only its SHA-256
+is stored. Alex (2026-11-01): "a session should only be obtainable via human passkey, cicd oidc token exchange, or
+jive mints a token and hands it off to a compute provider running an agent workflow". Two of those exist:
+
+| Way in | Session | Opened by | Lasts |
+| --- | --- | --- | --- |
+| A person's passkey | A person's (`sessions`) | `auth:register`, `auth:signIn`, or `signInRequests:claim` for a program whose request a passkey approved | 12 hours, revocable with `sessions:signOut` |
+| A deploy job's GitHub Actions ID token | A code repository's pipeline (`pipelineSessions`) | `pipelineSessions:signIn` (below) | 1 hour, deleted when it expires |
+
+The third, a session Jive mints for a compute provider running an agent workflow, waits on the compute resource kind.
+Each table has one function that writes it, `insertAccountSession` (`convex/model/sessions.ts`) and
+`insertPipelineSession` (`convex/model/pipelineSessions.ts`), and `test/sessions.test.ts` fails if any other file in
+`convex/` inserts a session or calls either from anywhere but the check before it. A function that acts for a person
+starts with `resolveSession`, one that acts for a pipeline with `resolvePipelineSession`; neither accepts the other's
+token.
 
 Passkeys use relying party `jive.sh`, so a passkey made on any `*.jive.sh` page (skill-sync's included) works, and
 the only accepted origin is `https://${WEBSITE_DOMAIN}` (`convex/model/webAuthn.ts`). Ceremonies are verified in
@@ -59,36 +71,44 @@ with its session token; a revoked or expired session signs nothing.
 
 ## How a pipeline calls it
 
-The deploy job of Jive's reusable pipeline has `id-token: write`. `jive-abstract-library` (0.3.0+, with
+The deploy job of Jive's reusable pipeline has `id-token: write`. `jive-abstract-library` (0.8.0+, with
 `jive.library.provisionWithJive: { "serverUrl": … }`) asks GitHub for an ID token with audience
-`https://api.jive.sh` and calls the action over Convex's HTTP API:
+`https://api.jive.sh`, signs the job in with it, then calls `packages:provision` with the session token, both over
+Convex's HTTP API:
 
 ```http
 POST <deployment URL>/api/action
 Authorization: Bearer <GitHub Actions ID token>
 
-{ "path": "packages:provision", "args": { "registry": "npm", "packageName": "@scope/name" }, "format": "json" }
+{ "path": "pipelineSessions:signIn", "args": {}, "format": "json" }
 ```
 
-Convex verifies the token itself (`convex/auth.config.ts`: a `customJwt` provider with GitHub's issuer, RS256,
+```http
+POST <deployment URL>/api/action
+
+{ "path": "packages:provision", "args": { "sessionToken": "jive_…", "registry": "npm", "packageName": "@scope/name" }, "format": "json" }
+```
+
+Convex verifies the ID token itself (`convex/auth.config.ts`: a `customJwt` provider with GitHub's issuer, RS256,
 and `applicationID` `https://api.jive.sh`); the key set comes from `GITHUB_ACTIONS_JWKS`, GitHub's
-`/.well-known/jwks` in production. The answer is one of:
+`/.well-known/jwks` in production. `signIn` answers `{ status: "signedIn", sessionToken, expiresAt }` or
+`{ status: "refused", reason }`. It checks the job (`convex/model/pipelineCaller.ts`): the token must come from
+`.github/workflows/pipeline.yml`, from a push or a manual run, on a protected branch or tag, on a GitHub-hosted
+runner, in a job that names a GitHub Actions environment, of a code repository registered with Jive, found by
+GitHub's immutable `repository_id` and `repository_owner_id`. The session keeps the repository, the environment and
+the workflow file, which provisioning acts on. `packages:provision` answers one of:
 
 | Answer | Meaning |
 | --- | --- |
 | `{ status: "ready" }` | Publish now, by trusted publishing. |
 | `{ status: "inProgress" }` | Another deploy job is provisioning this package; ask again shortly. |
-| `{ status: "refused", reason }` | Don't publish; `reason` says what to change. |
+| `{ status: "refused", reason }` | Don't publish; `reason` says what to change. A token that opens no live pipeline session is refused. |
 
 Any other failure is a function error, and the deploy fails without publishing.
 
 ## What `packages:provision` does
 
-1. **Who is calling** (`convex/model/pipelineCaller.ts`): the token must come from `.github/workflows/pipeline.yml`,
-   from a push or a manual run, on a protected branch or tag, on a GitHub-hosted runner, in a job that names a
-   GitHub Actions environment. The repository is found by GitHub's immutable `repository_id` and
-   `repository_owner_id`; an unregistered one is refused. A package already bound to another repository is
-   refused.
+1. **For which repository:** the pipeline session's. A package already bound to another repository is refused.
 2. **One at a time:** a mutation claims the package (`provisioningClaims`), so of two deploy jobs only one acts;
    the other gets `inProgress`. A claim lasts 5 minutes, so one left by a dead action is taken over.
 3. **Through the organization's npm connection** (`jive-resource-connector-package-registry-npm`): create the `0.0.0`
@@ -107,9 +127,9 @@ package exists and its publisher has published) answers `ready`. The connection 
 
 ## Records
 
-`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `sshKeys`, `signInRequests`, `organizations`,
-`connections`, `codeRepositories`, `packages`, `provisioningClaims`. Challenges and sign-in requests are deleted
-by a scheduled function when they expire.
+`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `pipelineSessions`, `sshKeys`,
+`signInRequests`, `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`. Challenges,
+sign-in requests and pipeline sessions are deleted by a scheduled function when they expire.
 
 A connection's credential (for npm: the token) is stored sealed, never in the
 clear: AES-256-GCM under `CONNECTION_KEY`, as `<nonce>.<ciphertext>` beside the key's version, the way
@@ -147,8 +167,10 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
 
 `bun run jive:cicd:audit` typechecks and runs:
 
-- `test/model.test.ts`: the caller checks, the publisher decisions, sealing, and the provisioning flow against
-  in-memory records and connector.
+- `test/model.test.ts`: the pipeline sign-in checks, the publisher decisions, sealing, and the provisioning flow
+  against in-memory records and connector.
+- `test/sessions.test.ts`: only `insertAccountSession` and `insertPipelineSession` insert sessions, and each is called
+  only after its check.
 - `test/connect-npm.test.ts`: the hidden prompt's line handling.
 - `test/auth.test.ts`: registration, sign-in, sign-out, an imported passkey, and a program's sign-in request, on the
   local backend through `ConvexHttpClient`, with a software passkey (`test/support/softwareAuthenticator.ts`) whose
@@ -159,15 +181,21 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
   agent passes the real `ssh-keygen -Y verify` (and fails for another commit); an SSH authentication blob's
   signature verifies against the public key; a made-up or revoked session, and an account with no key, are refused.
 - `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account); the npm
-  connection made by running `connect-npm` with the token piped in; `packages:provision` called over HTTP with
-  RS256 tokens shaped like GitHub's and signed by a key the test generates, against a fake npm registry that
-  guards every write with npm's web second-factor challenge: a new package refused with npm's page, a provisioned
-  package ready with no write, a repeated call changing nothing, a held claim, refusals, a connection
-  request used twice, and that the stored credential is sealed.
+  connection made by running `connect-npm` with the token piped in; `pipelineSessions:signIn` called over HTTP with
+  RS256 tokens shaped like GitHub's and signed by a key the test generates: no token, a wrong audience or key, an
+  unregistered repository, a pull request and a job outside an environment refused; a deploy job's session token
+  lasting an hour, stored only as its hash, its deletion scheduled at expiry. Then `packages:provision` with that
+  session, against a fake npm registry that guards every write with npm's web second-factor challenge: a made-up
+  token, a person's session and a deleted pipeline session refused; a pipeline's token refused by a person's call;
+  a new package refused with npm's page, a provisioned package ready with no write, a repeated call changing
+  nothing, a held claim, another repository refused, a connection request used twice, and that the stored
+  credential is sealed.
 
 ## Not built yet
 
 - The other resources' calls, organization membership, and a GitHub connection (design doc §3, §7).
+- The third way to a session: one Jive mints for a compute provider running an agent workflow, which waits on the
+  compute resource kind.
 - The local SSH agent that forwards sign requests to `ssh:sign` (the client side; ozy-cli's signing agent still
   derives its key on the machine).
 - `api.jive.sh` as the deployment's domain: it still serves `@jive-sh/app`'s Worker.

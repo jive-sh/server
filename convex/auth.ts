@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { usernameFor } from "./model/naming";
-import { SESSION_MS } from "./model/sessions";
+import { insertAccountSession } from "./model/sessions";
 import { approveSignInRequest } from "./model/signInRequests";
 import { SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
 import {
@@ -181,10 +181,7 @@ async function insertSession(ctx: MutationCtx, input: {
   readonly signInRequestId: string | undefined;
 }): Promise<{ readonly expiresAt: number }> {
   if (input.signInRequestId !== undefined) await approveSignInRequest(ctx, { requestId: input.signInRequestId, accountId: input.accountId });
-  const now = Date.now();
-  const expiresAt = now + SESSION_MS;
-  await ctx.db.insert("sessions", { accountId: input.accountId, tokenHash: input.tokenHash, origin: "browser", createdAt: now, expiresAt });
-  return { expiresAt };
+  return await insertAccountSession(ctx.db, { accountId: input.accountId, tokenHash: input.tokenHash, origin: "browser" });
 }
 
 /** Account, passkey and session in one transaction: an account without its passkey could never be signed in to. */

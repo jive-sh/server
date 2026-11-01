@@ -3,7 +3,6 @@ import { Effect, Layer, Option, Schema, pipe } from "effect";
 import { components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, type ActionCtx } from "./_generated/server";
-import { authorizePipelineCaller } from "./model/pipelineCaller";
 import {
   ProvisioningRecords,
   RegistryConnector,
@@ -32,11 +31,6 @@ function call<A>(run: () => Promise<A>): Effect.Effect<A, Error> {
 /** Jive's records, reached from an action through internal queries and mutations. */
 function recordsOver(ctx: ActionCtx): IProvisioningRecords {
   return {
-    findCodeRepository: (caller) => pipe(
-      call(() => ctx.runQuery(internal.packages.codeRepositoryByGithubIds, { repositoryId: caller.repositoryId, repositoryOwnerId: caller.repositoryOwnerId })),
-      Effect.map(Option.fromNullOr),
-      Effect.orDie,
-    ),
     findPackage: (packageName) => pipe(
       call(() => ctx.runQuery(internal.packages.packageByName, { packageName })),
       Effect.map(Option.fromNullOr),
@@ -112,25 +106,24 @@ function npmConnectorOver(ctx: ActionCtx): IRegistryConnector {
 
 /**
  * Makes a registry package ready for the calling deploy job to publish by trusted publishing (design doc §3).
- * Called by jive-abstract-library's deploy, with the job's GitHub Actions ID token, right before every publish.
- * `refused` says why; `inProgress` means another deploy job holds the package's claim, and the caller asks again.
- * Any other failure is thrown, and the deploy fails without publishing.
+ * Called by jive-abstract-library's deploy right before every publish, with the pipeline session the job signed in
+ * for (`pipelineSessions:signIn`). `refused` says why; `inProgress` means another deploy job holds the package's
+ * claim, and the caller asks again. Any other failure is thrown, and the deploy fails without publishing.
  */
 export const provision = action({
-  args: { registry: v.literal("npm"), packageName: v.string() },
+  args: { sessionToken: v.string(), registry: v.literal("npm"), packageName: v.string() },
   returns: v.union(
     v.object({ status: v.literal("ready") }),
     v.object({ status: v.literal("inProgress") }),
     v.object({ status: v.literal("refused"), reason: v.string() }),
   ),
-  handler: async (ctx, { packageName }) => {
-    const identity = await ctx.auth.getUserIdentity();
+  handler: async (ctx, { sessionToken, packageName }) => {
+    const pipeline = await ctx.runQuery(internal.pipelineSessions.pipeline, { sessionToken });
     const program = pipe(
-      identity === null
-        ? Effect.succeed({ status: "refused", reason: "the call carries no GitHub Actions ID token for https://api.jive.sh" } as const)
+      pipeline === null
+        ? Effect.succeed({ status: "refused", reason: "the session token opens no live pipeline session; sign the job in with pipelineSessions:signIn" } as const)
         : pipe(
-          authorizePipelineCaller(identity),
-          Effect.flatMap((caller) => provisionPackage({ caller, packageName, now: Date.now() })),
+          provisionPackage({ pipeline, packageName, now: Date.now() }),
           Effect.catchTag("ProvisionRefused", ({ reason }) => Effect.succeed({ status: "refused", reason } as const)),
         ),
       Effect.tap((outcome) => Effect.log(`provision ${packageName}: ${outcome.status}${outcome.status === "refused" ? `: ${outcome.reason}` : ""}`)),
@@ -140,18 +133,6 @@ export const provision = action({
       )),
     );
     return await Effect.runPromise(program);
-  },
-});
-
-export const codeRepositoryByGithubIds = internalQuery({
-  args: { repositoryId: v.string(), repositoryOwnerId: v.string() },
-  returns: v.union(v.null(), v.object({ id: v.string(), organizationId: v.string() })),
-  handler: async (ctx, { repositoryId, repositoryOwnerId }) => {
-    const repository = await ctx.db
-      .query("codeRepositories")
-      .withIndex("by_github_ids", (q) => q.eq("repositoryId", repositoryId).eq("repositoryOwnerId", repositoryOwnerId))
-      .unique();
-    return repository === null ? null : { id: repository._id, organizationId: repository.organizationId };
   },
 });
 

@@ -54,6 +54,22 @@ export default defineSchema({
   }).index("by_token_hash", ["tokenHash"]).index("by_account", ["accountId"]),
 
   /**
+   * A code repository's pipeline session, opened by exchanging a deploy job's GitHub Actions ID token
+   * (`pipelineSessions:signIn`). A table of its own because it acts as a code repository, not a person: it holds no
+   * account, and carries the job's checked claims that provisioning acts on. Only the token's SHA-256 is stored;
+   * each row is deleted when it expires.
+   */
+  pipelineSessions: defineTable({
+    codeRepositoryId: v.id("codeRepositories"),
+    tokenHash: v.string(),
+    repository: v.object({ owner: v.string(), name: v.string() }),
+    environment: v.string(),
+    workflowFile: v.string(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  }).index("by_token_hash", ["tokenHash"]),
+
+  /**
    * An account's SSH key (Alex, 2026-11-01: "The ssh key will be saved on the account"). One per account,
    * generated here; the private key never leaves the server. `sealedPrivateKey` is its PKCS#8, AES-256-GCM sealed
    * under `CONNECTION_KEY` version `keyVersion`, as connections are; `publicKey` is the OpenSSH line.

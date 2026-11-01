@@ -187,6 +187,38 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  pipelineSessions: {
+    document: {
+      codeRepositoryId: Id<"codeRepositories">;
+      createdAt: number;
+      environment: string;
+      expiresAt: number;
+      repository: { name: string; owner: string };
+      tokenHash: string;
+      workflowFile: string;
+      _id: Id<"pipelineSessions">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "codeRepositoryId"
+      | "createdAt"
+      | "environment"
+      | "expiresAt"
+      | "repository"
+      | "repository.name"
+      | "repository.owner"
+      | "tokenHash"
+      | "workflowFile";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_token_hash: ["tokenHash", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   provisioningClaims: {
     document: {
       expiresAt: number;

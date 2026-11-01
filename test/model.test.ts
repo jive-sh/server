@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit, Layer, Option, pipe } from "effect";
-import { authorizePipelineCaller, type PipelineCaller } from "../convex/model/pipelineCaller";
+import type { Id } from "../convex/_generated/dataModel";
+import { authorizePipelineCaller } from "../convex/model/pipelineCaller";
+import type { PipelineSession } from "../convex/model/pipelineSessions";
 import { PENDING_PUBLISHER_WINDOW_MS, planPublisher, type ListedPublisher, type PublisherClaims } from "../convex/model/publisherPlan";
 import {
   ProvisioningRecords,
@@ -61,12 +63,12 @@ describe("authorizePipelineCaller", () => {
   });
 
   test("refuses a pull request", async () => {
-    expect(await refusal({ ...deployJobIdentity, event_name: "pull_request" })).toContain("a pull_request run may not provision");
+    expect(await refusal({ ...deployJobIdentity, event_name: "pull_request" })).toContain("a pull_request run may not sign in");
   });
 
   test("refuses a workflow other than pipeline.yml", async () => {
     expect(await refusal({ ...deployJobIdentity, workflow_ref: "chaine-dance/jive-test-package/.github/workflows/release.yml@refs/heads/main" }))
-      .toContain("only .github/workflows/pipeline.yml may provision");
+      .toContain("only .github/workflows/pipeline.yml may sign in");
   });
 
   test("refuses a self-hosted runner", async () => {
@@ -148,9 +150,9 @@ describe("sealing", () => {
   });
 });
 
-const caller: PipelineCaller = {
-  repositoryId: "111",
-  repositoryOwnerId: "222",
+const pipeline: PipelineSession = {
+  codeRepositoryId: "repo-1" as Id<"codeRepositories">,
+  organizationId: "org-1" as Id<"organizations">,
   repository: { owner: "chaine-dance", name: "jive-test-package" },
   environment: "latest",
   workflowFile: "pipeline.yml",
@@ -160,7 +162,6 @@ const PACKAGE = "@chaine.dance/jive-test-package";
 
 /** In-memory records and connector, logging every call in order. */
 function fakes(input: {
-  registered?: boolean;
   maybePackage?: Option.Option<PackageRecord>;
   connected?: boolean;
   claimHeld?: boolean;
@@ -169,7 +170,6 @@ function fakes(input: {
 }) {
   const calls: Array<string> = [];
   const records: IProvisioningRecords = {
-    findCodeRepository: () => Effect.succeed(input.registered === false ? Option.none() : Option.some({ id: "repo-1", organizationId: "org-1" })),
     findPackage: () => Effect.succeed(input.maybePackage ?? Option.none()),
     npmAccount: () => Effect.succeed(input.connected === false ? Option.none() : Option.some(account)),
     claim: () => Effect.sync(() => {
@@ -195,7 +195,7 @@ function fakes(input: {
     removeTrustedPublisher: ({ id }) => Effect.sync(() => void calls.push(`remove ${id}`)),
   };
   const layer = Layer.mergeAll(Layer.succeed(ProvisioningRecords, records), Layer.succeed(RegistryConnector, connector));
-  const run = () => Effect.runPromiseExit(pipe(provisionPackage({ caller, packageName: PACKAGE, now: NOW }), Effect.provide(layer)));
+  const run = () => Effect.runPromiseExit(pipe(provisionPackage({ pipeline, packageName: PACKAGE, now: NOW }), Effect.provide(layer)));
   return { calls, run };
 }
 
@@ -209,7 +209,7 @@ describe("provisionPackage", () => {
   test("an already provisioned package with a validated publisher changes nothing on npm", async () => {
     const { calls, run } = fakes({
       maybePackage: Option.some({ codeRepositoryId: "repo-1", trustedPublishers: [{ environment: "latest", registeredAt: NOW - 1000 }] }),
-      listed: [{ id: "p1", claims: { provider: "github", repository: caller.repository, workflowFile: "pipeline.yml", environment: "latest" }, status: "validated" }],
+      listed: [{ id: "p1", claims: { provider: "github", repository: pipeline.repository, workflowFile: "pipeline.yml", environment: "latest" }, status: "validated" }],
     });
     expect(await run()).toEqual(Exit.succeed({ status: "ready" }));
     expect(calls).toEqual(["claim", "createPlaceholder", "listTrustedPublishers", "record -", "release holder-1"]);
@@ -218,7 +218,7 @@ describe("provisionPackage", () => {
   test("an expired publisher is removed and registered again", async () => {
     const { calls, run } = fakes({
       maybePackage: Option.some({ codeRepositoryId: "repo-1", trustedPublishers: [{ environment: "latest", registeredAt: NOW - 3 * 24 * 60 * 60 * 1000 }] }),
-      listed: [{ id: "p1", claims: { provider: "github", repository: caller.repository, workflowFile: "pipeline.yml", environment: "latest" }, status: "unvalidated" }],
+      listed: [{ id: "p1", claims: { provider: "github", repository: pipeline.repository, workflowFile: "pipeline.yml", environment: "latest" }, status: "unvalidated" }],
     });
     expect(await run()).toEqual(Exit.succeed({ status: "ready" }));
     expect(calls).toEqual(["claim", "createPlaceholder", "listTrustedPublishers", "remove p1", "register latest", "record latest", "release holder-1"]);
@@ -234,12 +234,6 @@ describe("provisionPackage", () => {
     expect(Exit.isFailure(exit)).toBe(true);
     return JSON.stringify(exit);
   }
-
-  test("refuses an unregistered repository before claiming", async () => {
-    const { calls, run } = fakes({ registered: false });
-    expect(await refusedReason(await run())).toContain("is not a code repository registered with Jive");
-    expect(calls).toEqual([]);
-  });
 
   test("refuses a package bound to another repository", async () => {
     const { calls, run } = fakes({ maybePackage: Option.some({ codeRepositoryId: "repo-2", trustedPublishers: [] }) });

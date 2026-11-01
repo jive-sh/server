@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { ConvexHttpClient } from "convex/browser";
+import { ConvexError } from "convex/values";
+import { api } from "../convex/_generated/api";
+import { registerAccount } from "./support/accounts";
+import { createSoftwarePasskey } from "./support/softwareAuthenticator";
 import { LOCAL_ENV, SERVER_DIR, TEST_CONNECTION_KEY, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
 
 /**
- * `packages:provision` end to end, inside Convex's runtime: this package pushed to an anonymous local Convex
- * backend (no Convex account), called over Convex's HTTP API with RS256 tokens shaped like GitHub Actions ID
- * tokens and signed by a key this test generates, whose JWKS the deployment trusts in place of GitHub's
+ * A pipeline signing in (`pipelineSessions:signIn`) and `packages:provision` end to end, inside Convex's runtime:
+ * this package pushed to an anonymous local Convex backend (no Convex account), called over Convex's HTTP API as
+ * jive-abstract-library calls it, with RS256 tokens shaped like GitHub Actions ID tokens and signed by a key this test
+ * generates, whose JWKS the deployment trusts in place of GitHub's
  * (`GITHUB_ACTIONS_JWKS`). The npm connector acts on a fake registry served here, which guards every write with
  * npm's web second-factor challenge, as npm does. Nothing here reaches npm or GitHub.
  */
@@ -64,15 +70,27 @@ async function idToken(claims: Record<string, unknown>, key = signingKey): Promi
   return `${signingInput}.${base64Url(signature)}`;
 }
 
-/** Calls `packages:provision` as jive-abstract-library does: Convex's HTTP API with the ID token as bearer. */
-async function provision(token: string | undefined): Promise<any> {
+/** One function over Convex's HTTP API, with `bearer` as the Authorization token when given. */
+async function callAction(path: string, args: Record<string, unknown>, bearer?: string): Promise<any> {
   const response = await fetch(`${convexUrl}/api/action`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...(token === undefined ? {} : { authorization: `Bearer ${token}` }) },
-    body: JSON.stringify({ path: "packages:provision", args: { registry: "npm", packageName: PACKAGE }, format: "json" }),
+    headers: { "content-type": "application/json", ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }) },
+    body: JSON.stringify({ path, args, format: "json" }),
   });
   return { httpStatus: response.status, body: await response.json().catch(() => null) };
 }
+
+/** Signs the job in with its ID token as the bearer, as jive-abstract-library does. */
+const signIn = (maybeIdToken: string | undefined) => callAction("pipelineSessions:signIn", {}, maybeIdToken);
+
+/** The session token of a deploy job whose ID token carries `claims` over the defaults. */
+async function signedIn(claims: Record<string, unknown>): Promise<string> {
+  const { body } = await signIn(await idToken(claims));
+  expect(body).toMatchObject({ status: "success", value: { status: "signedIn" } });
+  return body.value.sessionToken;
+}
+
+const provision = (sessionToken: string) => callAction("packages:provision", { sessionToken, registry: "npm", packageName: PACKAGE });
 
 beforeAll(async () => {
   const trusted = await generateGithubActionsJwks();
@@ -128,7 +146,7 @@ beforeAll(async () => {
     },
   });
 
-  await initLocalDeployment({ GITHUB_ACTIONS_JWKS: trusted.jwks, CONNECTION_KEY: TEST_CONNECTION_KEY, NPM_REGISTRY_URL: `http://127.0.0.1:${registry.port}` });
+  await initLocalDeployment({ GITHUB_ACTIONS_JWKS: trusted.jwks, WEBSITE_DOMAIN: "jive.sh", CONNECTION_KEY: TEST_CONNECTION_KEY, NPM_REGISTRY_URL: `http://127.0.0.1:${registry.port}` });
 
   devServer = await startDevServer();
   convexUrl = devServer.url;
@@ -155,32 +173,71 @@ afterAll(async () => {
   registry?.stop(true);
 });
 
-describe("who may call", () => {
-  test("a call without a token is refused", async () => {
-    expect(await provision(undefined)).toMatchObject({ body: { status: "success", value: { status: "refused", reason: expect.stringContaining("no GitHub Actions ID token") } } });
+describe("signing a pipeline in", () => {
+  test("a call without an ID token is refused", async () => {
+    expect(await signIn(undefined)).toMatchObject({ body: { status: "success", value: { status: "refused", reason: expect.stringContaining("no GitHub Actions ID token") } } });
   }, TIMEOUT);
 
   test("a token for another audience, or signed by a key the deployment does not trust, is rejected by Convex", async () => {
     for (const token of [await idToken({ aud: "https://example.com" }), await idToken({}, otherSigningKey)]) {
-      const { body } = await provision(token);
+      const { body } = await signIn(token);
       expect(body?.status === "success").toBe(false);
     }
   }, TIMEOUT);
 
   test("a job of a repository nobody registered is refused", async () => {
-    expect(await provision(await idToken({ repository_id: "1" })))
+    expect(await signIn(await idToken({ repository_id: "1" })))
       .toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("is not a code repository registered with Jive") } } });
   }, TIMEOUT);
 
-  test("a pull request's job is refused", async () => {
-    expect(await provision(await idToken({ event_name: "pull_request" })))
+  test("a pull request's job, or a job outside a deploy environment, is refused", async () => {
+    expect(await signIn(await idToken({ event_name: "pull_request" })))
       .toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("pull_request") } } });
+    expect(await signIn(await idToken({ environment: undefined })))
+      .toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("no GitHub Actions environment") } } });
+  }, TIMEOUT);
+
+  test("a deploy job of the registered repository gets a session token for an hour, stored only as its hash, deleted when it expires", async () => {
+    const before = Date.now();
+    const { body } = await signIn(await idToken({}));
+    // Read before toMatchObject: Bun's writes an asymmetric matcher into the object it checks.
+    const { sessionToken, expiresAt } = body.value;
+    expect(body).toMatchObject({ status: "success", value: { status: "signedIn" } });
+    expect(sessionToken).toMatch(/^jive_[A-Za-z0-9_-]{43}$/);
+    expect(expiresAt - before).toBeGreaterThan(59 * 60 * 1000);
+    expect(expiresAt - Date.now()).toBeLessThanOrEqual(60 * 60 * 1000);
+
+    const stored = await convex(["run", "--inline-query", `return await ctx.db.query("pipelineSessions").collect()`]);
+    expect(stored).toContain("tokenHash");
+    expect(stored).not.toContain(sessionToken);
+    const scheduled = await convex(["run", "--inline-query", `return (await ctx.db.system.query("_scheduled_functions").collect()).filter((job) => job.name.startsWith("pipelineSessions"))`]);
+    expect(scheduled).toContain(`"scheduledTime": ${expiresAt}`);
+  }, TIMEOUT);
+
+  test("provisioning refuses a made-up token, a person's session, and a pipeline session once it is deleted", async () => {
+    const noSession = { body: { value: { status: "refused", reason: expect.stringContaining("opens no live pipeline session") } } };
+    expect(await provision("jive_not-a-token")).toMatchObject(noSession);
+
+    const person = await registerAccount(new ConvexHttpClient(convexUrl), await createSoftwarePasskey("jive.sh"));
+    expect(await provision(person.sessionToken)).toMatchObject(noSession);
+
+    const sessionToken = await signedIn({});
+    const rows = JSON.parse(await convex(["run", "--inline-query", `return (await ctx.db.query("pipelineSessions").collect()).map((row) => row._id)`]));
+    for (const id of rows) await convex(["run", "pipelineSessions:deleteSession", JSON.stringify({ id })]);
+    expect(await provision(sessionToken)).toMatchObject(noSession);
+  }, TIMEOUT);
+
+  test("a pipeline's session token opens no person's session", async () => {
+    const client = new ConvexHttpClient(convexUrl);
+    const refused = await client.query(api.ssh.publicKey, { sessionToken: await signedIn({}) }).then(() => undefined, (cause: unknown) => cause);
+    expect(refused).toBeInstanceOf(ConvexError);
+    expect(String((refused as ConvexError<string>).data)).toContain("no live session");
   }, TIMEOUT);
 });
 
 describe("provisioning", () => {
   test("a new package is refused with npm's second-factor page, publishing nothing, since nothing passes a person's answer back yet", async () => {
-    expect(await provision(await idToken({}))).toMatchObject({ body: { status: "success", value: {
+    expect(await provision(await signedIn({}))).toMatchObject({ body: { status: "success", value: {
       status: "refused",
       reason: `npm asked for its second factor to publish ${PACKAGE}'s placeholder; a person answers it on ${SECOND_FACTOR_PAGE}, and Jive cannot pass that answer back to npm yet`,
     } } });
@@ -195,8 +252,8 @@ describe("provisioning", () => {
       type: "github",
       claims: { repository: "chaine-dance/jive-test-package", workflow_ref: { file: "pipeline.yml" }, environment: "latest" },
     }];
-    expect(await provision(await idToken({}))).toMatchObject({ body: { status: "success", value: { status: "ready" } } });
-    expect(await provision(await idToken({}))).toMatchObject({ body: { value: { status: "ready" } } });
+    expect(await provision(await signedIn({}))).toMatchObject({ body: { status: "success", value: { status: "ready" } } });
+    expect(await provision(await signedIn({}))).toMatchObject({ body: { value: { status: "ready" } } });
     expect(npm.publishes).toEqual([]);
     expect(npm.trustRequests).toBe(0);
     expect(npm.oneTimePasswords).toEqual([]);
@@ -204,9 +261,9 @@ describe("provisioning", () => {
 
   test("another deploy job's claim answers inProgress, and the package provisions once it is released", async () => {
     await convex(["run", "packages:claim", JSON.stringify({ packageName: PACKAGE, holder: "another-job" })]);
-    expect(await provision(await idToken({}))).toMatchObject({ body: { value: { status: "inProgress" } } });
+    expect(await provision(await signedIn({}))).toMatchObject({ body: { value: { status: "inProgress" } } });
     await convex(["run", "packages:release", JSON.stringify({ packageName: PACKAGE, holder: "another-job" })]);
-    expect(await provision(await idToken({}))).toMatchObject({ body: { value: { status: "ready" } } });
+    expect(await provision(await signedIn({}))).toMatchObject({ body: { value: { status: "ready" } } });
   }, TIMEOUT);
 
   test("another repository asking for the same package name is refused", async () => {
@@ -214,7 +271,7 @@ describe("provisioning", () => {
       organizationName: "jive-test",
       repository: { repositoryId: "900003", repositoryOwnerId: REPOSITORY.repositoryOwnerId, owner: "chaine-dance", name: "impostor" },
     })]);
-    expect(await provision(await idToken({ repository_id: "900003", repository: "chaine-dance/impostor" })))
+    expect(await provision(await signedIn({ repository_id: "900003", repository: "chaine-dance/impostor" })))
       .toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("provisioned for another code repository") } } });
   }, TIMEOUT);
 

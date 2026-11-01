@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { Effect } from "effect";
 import { internal } from "./_generated/api";
 import { action, internalMutation, query } from "./_generated/server";
-import { SESSION_MS } from "./model/sessions";
+import { insertAccountSession } from "./model/sessions";
 import { SIGN_IN_REQUEST_MS, drawConfirmationCode } from "./model/signInRequests";
 import { CLAIM_SECRET_PREFIX, SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
 import { relyingPartyOf } from "./model/webAuthn";
@@ -111,8 +111,7 @@ export const claimWithToken = internalMutation({
     // The account is read again at claim time: one deleted since approving gets no session.
     if (await ctx.db.get(request.approvedAccountId) === null) return { status: "gone" } as const;
     await ctx.db.patch(request._id, { claimedAt: now });
-    const expiresAt = now + SESSION_MS;
-    await ctx.db.insert("sessions", { accountId: request.approvedAccountId, tokenHash, origin: "signInRequest", createdAt: now, expiresAt });
+    const { expiresAt } = await insertAccountSession(ctx.db, { accountId: request.approvedAccountId, tokenHash, origin: "signInRequest" });
     return { status: "approved", expiresAt } as const;
   },
 });

@@ -65,9 +65,18 @@ export declare const api: {
     provision: FunctionReference<
       "action",
       "public",
-      { packageName: string; registry: "npm" },
+      { packageName: string; registry: "npm"; sessionToken: string },
       | { status: "ready" }
       | { status: "inProgress" }
+      | { reason: string; status: "refused" }
+    >;
+  };
+  pipelineSessions: {
+    signIn: FunctionReference<
+      "action",
+      "public",
+      {},
+      | { expiresAt: number; sessionToken: string; status: "signedIn" }
       | { reason: string; status: "refused" }
     >;
   };
@@ -244,12 +253,6 @@ export declare const internal: {
       { holder: string; packageName: string },
       null | string
     >;
-    codeRepositoryByGithubIds: FunctionReference<
-      "query",
-      "internal",
-      { repositoryId: string; repositoryOwnerId: string },
-      null | { id: string; organizationId: string }
-    >;
     packageByName: FunctionReference<
       "query",
       "internal",
@@ -274,6 +277,41 @@ export declare const internal: {
       "internal",
       { holder: string; packageName: string },
       null
+    >;
+  };
+  pipelineSessions: {
+    deleteSession: FunctionReference<
+      "mutation",
+      "internal",
+      { id: Id<"pipelineSessions"> },
+      null
+    >;
+    open: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        caller: {
+          environment: string;
+          repository: { name: string; owner: string };
+          repositoryId: string;
+          repositoryOwnerId: string;
+          workflowFile: string;
+        };
+        tokenHash: string;
+      },
+      null | { expiresAt: number }
+    >;
+    pipeline: FunctionReference<
+      "query",
+      "internal",
+      { sessionToken: string },
+      null | {
+        codeRepositoryId: Id<"codeRepositories">;
+        environment: string;
+        organizationId: Id<"organizations">;
+        repository: { name: string; owner: string };
+        workflowFile: string;
+      }
     >;
   };
   seed: {
