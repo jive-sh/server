@@ -1,7 +1,7 @@
 /**
- * An account's SSH key: ed25519, generated on the server and never leaving it. The private key is kept as PKCS#8,
- * sealed; the public key is handed out in OpenSSH's `authorized_keys` form, which GitHub accepts as both an
- * authentication key and a signing key. Web Crypto's Ed25519, which Convex's default runtime has.
+ * An account's SSH key: ed25519, generated here and never leaving the server. The private key is kept as PKCS#8,
+ * sealed; the public key is handed out in OpenSSH's `authorized_keys` form. Web Crypto's Ed25519, which Convex's
+ * default runtime has.
  */
 
 const ALGORITHM = "ssh-ed25519";
@@ -48,17 +48,16 @@ export interface GeneratedSshKey {
 }
 
 export async function generateSshKey(comment: string): Promise<GeneratedSshKey> {
-  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as CryptoKeyPair;
-  const rawPublicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+  const generated = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  if (!("privateKey" in generated)) throw new Error("Ed25519 key generation did not return a key pair");
+  const rawPublicKey = new Uint8Array(await crypto.subtle.exportKey("raw", generated.publicKey));
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", generated.privateKey));
   return { publicKey: openSshPublicKey(rawPublicKey, comment), privateKeyPkcs8: toBase64(pkcs8) };
 }
 
 /**
  * Signs `data` and returns the signature as SSH encodes it (`string "ssh-ed25519" || string <64 bytes>`, RFC 8709),
- * which is exactly what an SSH agent returns in `SSH_AGENT_SIGN_RESPONSE`. So a local agent forwards each sign
- * request's data unchanged, whatever it is: the SSHSIG blob `ssh-keygen -Y sign` builds for a git commit, or the
- * session-bound blob of an SSH authentication.
+ * which is exactly what an SSH agent returns in `SSH_AGENT_SIGN_RESPONSE`.
  */
 export async function signWithSshKey(privateKeyPkcs8: string, data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   const key = await crypto.subtle.importKey("pkcs8", fromBase64(privateKeyPkcs8), { name: "Ed25519" }, false, ["sign"]);

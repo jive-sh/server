@@ -157,3 +157,81 @@ describe("signing", () => {
     expect(await refusal(client.action(api.ssh.createKey, { sessionToken }))).toContain("no live session");
   }, TIMEOUT);
 });
+
+const fromBase64 = (value: string) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+
+describe("the organization's npm connection", () => {
+  const seed = async (name: string) => {
+    const unique = `${name}-${crypto.randomUUID()}`;
+    const repository = { repositoryId: `repo-${unique}`, repositoryOwnerId: `owner-${unique}`, owner: "jive-sh", name: unique };
+    const seeded = JSON.parse(await convex(["run", "seed:organizationWithRepository", JSON.stringify({
+      organizationName: unique,
+      repository,
+    })])) as { organizationId: string };
+    return { organizationId: seeded.organizationId, repositoryOwner: repository.owner, repositoryName: repository.name };
+  };
+
+  test("saves the token on the repository's organization, and the component returns it", async () => {
+    const seeded = await seed("account-keys-token");
+    const sessionToken = await signedIn();
+    const args = { sessionToken, repositoryOwner: seeded.repositoryOwner, repositoryName: seeded.repositoryName };
+    const organizationId = seeded.organizationId;
+    // `convex run` prints nothing when the function returns null.
+    const before = await convex(["run", "npmConnection:token", JSON.stringify({ organizationId }), "--component", "accountKeys"]);
+    expect(before.trim()).toBe("");
+    expect(await client.query(api.npmSessions.status, args)).toEqual({ hasToken: false, passkeyRegistered: false });
+    await client.action(api.npmSessions.save, { ...args, token: "npm-token-value" });
+    expect(await client.action(api.npmSessions.token, args)).toEqual({ token: "npm-token-value" });
+    expect(await client.query(api.npmSessions.status, args)).toEqual({ hasToken: true, passkeyRegistered: false });
+    const fromComponent = JSON.parse(await convex(["run", "npmConnection:token", JSON.stringify({ organizationId }), "--component", "accountKeys"]));
+    expect(fromComponent).toEqual({ token: "npm-token-value" });
+  }, TIMEOUT);
+
+  test("the signing passkey signs a challenge, and a dead session is refused", async () => {
+    const seeded = await seed("account-keys-passkey");
+    const sessionToken = await signedIn();
+    const args = { sessionToken, repositoryOwner: seeded.repositoryOwner, repositoryName: seeded.repositoryName };
+    const organizationId = seeded.organizationId;
+    await client.action(api.npmSessions.save, { ...args, token: "npm-token-value" });
+    const challenge = btoa("ceremony");
+    expect(await refusal(client.action(api.signingPasskey.sign, { ...args, challenge }))).toContain("no signing passkey");
+
+    const ensured = await client.action(api.signingPasskey.ensure, args);
+    expect(await client.action(api.signingPasskey.ensure, args)).toEqual(ensured);
+    const { signature } = await client.action(api.signingPasskey.sign, { ...args, challenge });
+    const publicKey = await crypto.subtle.importKey("spki", fromBase64(ensured.publicKeySpki), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    const signedBytes = fromBase64(signature);
+    expect(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, publicKey, signedBytes, text("ceremony"))).toBe(true);
+
+    const fromComponent = JSON.parse(await convex(["run", "npmConnection:sign", JSON.stringify({
+      organizationId,
+      challenge: { $bytes: challenge },
+    }), "--component", "accountKeys"])) as { credentialId: string; signature: { $bytes: string } };
+    expect(fromComponent.credentialId).toBe(ensured.credentialId);
+    expect(await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      publicKey,
+      fromBase64(fromComponent.signature.$bytes),
+      text("ceremony"),
+    )).toBe(true);
+
+    await client.action(api.npmSessions.markPasskeyRegistered, args);
+    expect(await client.query(api.npmSessions.status, args)).toEqual({ hasToken: true, passkeyRegistered: true });
+
+    await client.mutation(api.sessions.signOut, { sessionToken });
+    expect(await refusal(client.action(api.npmSessions.token, args))).toContain("no live session");
+    expect(await refusal(client.action(api.signingPasskey.sign, { ...args, challenge }))).toContain("no live session");
+  }, TIMEOUT);
+
+  test("an unregistered repository is not a dead session", async () => {
+    const sessionToken = await signedIn();
+    const reason = await refusal(client.action(api.npmSessions.save, {
+      sessionToken,
+      repositoryOwner: "nobody",
+      repositoryName: "missing",
+      token: "npm-token-value",
+    }));
+    expect(reason).not.toContain("no live session");
+    expect(reason).toContain("not registered");
+  }, TIMEOUT);
+});

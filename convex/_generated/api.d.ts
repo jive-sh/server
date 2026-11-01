@@ -61,6 +61,37 @@ export declare const api: {
       null
     >;
   };
+  npmSessions: {
+    markPasskeyRegistered: FunctionReference<
+      "action",
+      "public",
+      { repositoryName: string; repositoryOwner: string; sessionToken: string },
+      null
+    >;
+    save: FunctionReference<
+      "action",
+      "public",
+      {
+        repositoryName: string;
+        repositoryOwner: string;
+        sessionToken: string;
+        token: string;
+      },
+      null
+    >;
+    status: FunctionReference<
+      "query",
+      "public",
+      { repositoryName: string; repositoryOwner: string; sessionToken: string },
+      { hasToken: boolean; passkeyRegistered: boolean }
+    >;
+    token: FunctionReference<
+      "action",
+      "public",
+      { repositoryName: string; repositoryOwner: string; sessionToken: string },
+      { token: string }
+    >;
+  };
   packages: {
     provision: FunctionReference<
       "action",
@@ -86,6 +117,25 @@ export declare const api: {
       "public",
       { sessionToken: string },
       null
+    >;
+  };
+  signingPasskey: {
+    ensure: FunctionReference<
+      "action",
+      "public",
+      { repositoryName: string; repositoryOwner: string; sessionToken: string },
+      { credentialId: string; publicKeySpki: string }
+    >;
+    sign: FunctionReference<
+      "action",
+      "public",
+      {
+        challenge: string;
+        repositoryName: string;
+        repositoryOwner: string;
+        sessionToken: string;
+      },
+      { signature: string }
     >;
   };
   signInRequests: {
@@ -246,6 +296,14 @@ export declare const internal: {
       null
     >;
   };
+  npmSessions: {
+    organizationForRepository: FunctionReference<
+      "query",
+      "internal",
+      { repositoryName: string; repositoryOwner: string; sessionToken: string },
+      null | string
+    >;
+  };
   packages: {
     claim: FunctionReference<
       "mutation",
@@ -371,11 +429,7 @@ export declare const internal: {
       "query",
       "internal",
       { sessionToken: string },
-      null | {
-        accountId: Id<"accounts">;
-        publicKey: null | string;
-        username: string;
-      }
+      null | { accountId: Id<"accounts">; username: string }
     >;
     sealedKey: FunctionReference<
       "query",
@@ -383,20 +437,10 @@ export declare const internal: {
       { sessionToken: string },
       null | { sealed: null | { keyVersion: number; sealedPrivateKey: string } }
     >;
-    storeKey: FunctionReference<
-      "mutation",
-      "internal",
-      {
-        accountId: Id<"accounts">;
-        keyVersion: number;
-        publicKey: string;
-        sealedPrivateKey: string;
-      },
-      string
-    >;
   };
 };
 
 export declare const components: {
   packageRegistryNpm: import("jive-resource-connector-package-registry-npm/_generated/component.js").ComponentApi<"packageRegistryNpm">;
+  accountKeys: import("../components/accountKeys/_generated/component.js").ComponentApi<"accountKeys">;
 };

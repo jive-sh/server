@@ -54,8 +54,8 @@ is claimed once. All of it is plain Convex, so a program calls it with `ConvexHt
 
 Alex (2026-11-01): "The ssh key will be saved on the account, and a ssh signing request paired with a session token
 would have jive internally load the ssh key and sign the request". Each account has at most one ed25519 key,
-generated on the server; its private key never leaves it, sealed under `CONNECTION_KEY` as connections are
-(`convex/ssh.ts`, `convex/model/sshKeys.ts`).
+generated in the `accountKeys` component; its private key never leaves the server, sealed under `CONNECTION_KEY`.
+`convex/ssh.ts` checks the session and calls the component. The calls below are unchanged.
 
 | Call | Kind | What it does |
 | --- | --- | --- |
@@ -68,6 +68,17 @@ holding no key forwards each sign request's data as it arrives: the SSHSIG blob 
 git commit, or the session-bound blob of an SSH authentication. The public key goes on GitHub as both an
 authentication key and a signing key. The agent signs in once through a sign-in request (above) and calls `sign`
 with its session token; a revoked or expired session signs nothing.
+
+## The organization's npm connection
+
+The same component holds one npm connection per organization (connector `npm`) and the P-256 signing passkey
+registered on that npm account. A person with the organization's npm access creates the connection once, through
+the browser sign-in `npmSessions:save` runs, naming the code repository the connection is for. `npmSessions` and
+`signingPasskey` check the Jive session and that repository, then call the component. `provision` (the default
+export of `convex/provision.ts`) reads the token and the passkey assertion from `accountKeys.npmConnection.token`
+and `accountKeys.npmConnection.sign`, and passes the token to the npm connector's `resource.ensureInstance`
+(see `@jive-sh/jive`'s `docs/jive_server_provision_api.md`). `packages:provision` still reads the app `connections`
+table until that call lands.
 
 ## How a pipeline calls it
 
@@ -127,8 +138,9 @@ package exists and its publisher has published) answers `ready`. The connection 
 
 ## Records
 
-`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `pipelineSessions`, `sshKeys`,
-`signInRequests`, `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`. Challenges,
+`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `pipelineSessions`,
+`signInRequests`, `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`. SSH keys,
+npm connections and signing passkeys are the `accountKeys` component's tables. Challenges,
 sign-in requests and pipeline sessions are deleted by a scheduled function when they expire.
 
 A connection's credential (for npm: the token) is stored sealed, never in the

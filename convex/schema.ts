@@ -70,19 +70,6 @@ export default defineSchema({
   }).index("by_token_hash", ["tokenHash"]),
 
   /**
-   * An account's SSH key (Alex, 2026-11-01: "The ssh key will be saved on the account"). One per account,
-   * generated here; the private key never leaves the server. `sealedPrivateKey` is its PKCS#8, AES-256-GCM sealed
-   * under `CONNECTION_KEY` version `keyVersion`, as connections are; `publicKey` is the OpenSSH line.
-   */
-  sshKeys: defineTable({
-    accountId: v.id("accounts"),
-    publicKey: v.string(),
-    sealedPrivateKey: v.string(),
-    keyVersion: v.number(),
-    createdAt: v.number(),
-  }).index("by_account", ["accountId"]),
-
-  /**
    * A program on a person's machine waiting to be signed in: it opens the request and keeps the claim secret
    * (stored as its SHA-256), the person approves it on `jive.sh/login?request=<id>` with a passkey, and the
    * program claims a session of its own. `confirmationCode` is shown by both the program and the page.
@@ -102,7 +89,8 @@ export default defineSchema({
   /**
    * A connector initialised for an organization. `sealedCredential` is the connector's account (for npm, a
    * token from a person's npm login) as JSON, AES-256-GCM sealed under `CONNECTION_KEY` version `keyVersion`
-   * (`<nonce>.<ciphertext>`, base64url), the way @jive-sh/app's Cloudflare backend did.
+   * (`<nonce>.<ciphertext>`, base64url), the way @jive-sh/app's Cloudflare backend did. `packages:provision`
+   * still reads this table. The connection `provision` reads is the accountKeys component's.
    */
   connections: defineTable({
     organizationId: v.id("organizations"),
