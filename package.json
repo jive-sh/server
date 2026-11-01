@@ -40,7 +40,8 @@
       "runsOnPullRequests": true,
       "runsOn": "ubuntu-latest",
       "requiredSecrets": [
-        "CONVEX_DEPLOY_KEY"
+        "CONVEX_DEPLOY_KEY",
+        "NPM_TOKEN"
       ]
     },
     "backend-convex": {
@@ -66,9 +67,7 @@
         }
       },
       "afterDeploy": null,
-      "provisionWithJive": {
-        "serverUrl": "https://adventurous-viper-740.convex.cloud"
-      }
+      "provisionWithJive": null
     }
   }
 }
