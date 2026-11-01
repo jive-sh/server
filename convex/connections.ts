@@ -11,13 +11,11 @@ import { parseConnectionKey, seal } from "./model/sealing";
  * Connecting npm is scaffolding until `connections.create` exists (design doc §3), and is what `bun run
  * connect-npm` drives: a deployment admin asks `openNpmConnectionRequest` (through `convex run`, which carries no
  * secret) for a single-use request id, then sends the credential with that id to `completeNpmConnection` in an
- * HTTPS body, so the token and the authenticator secret never appear on a command line.
+ * HTTPS body, so the token never appears on a command line.
  */
 
 /** How long a connection request can be redeemed. */
 const REQUEST_MS = 5 * 60 * 1000;
-
-const BASE32 = /^[A-Z2-7]+$/;
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
@@ -66,20 +64,18 @@ export const redeemNpmConnectionRequest = internalMutation({
 });
 
 /**
- * Stores the organization's npm account, sealed: its token and its authenticator-app secret (base32, as npm's
- * two-factor setup shows it). Public, but it acts only with an unexpired request id from
+ * Stores the organization's npm account, sealed: a token from that person's npm login. Public, but it acts only with an unexpired request id from
  * `openNpmConnectionRequest`, which it spends. Replaces any npm connection the organization had. Never logs or
  * returns the credential.
  */
 export const completeNpmConnection = action({
-  args: { requestId: v.string(), token: v.string(), totpSecret: v.string() },
+  args: { requestId: v.string(), token: v.string() },
   returns: v.null(),
-  handler: async (ctx, { requestId, token, totpSecret }) => {
+  handler: async (ctx, { requestId, token }) => {
     const organizationId = await ctx.runMutation(internal.connections.redeemNpmConnectionRequest, { requestHash: await sha256Hex(requestId) });
     if (organizationId === null) throw new Error("the connection request is unknown, already used or expired; run connect-npm again");
     if (token.trim() === "") throw new Error("the npm token is empty");
-    if (!BASE32.test(totpSecret)) throw new Error("the authenticator secret must be uppercase base32 (A-Z, 2-7) without padding");
-    const credential = JSON.stringify({ token, secondFactor: { type: "totp", secret: totpSecret } });
+    const credential = JSON.stringify({ token });
     const { sealedCredential, keyVersion } = await Effect.runPromise(pipe(
       Effect.gen(function* () {
         const key = yield* parseConnectionKey(process.env.CONNECTION_KEY);

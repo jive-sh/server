@@ -11,11 +11,19 @@ import { planPublisher, type ListedPublisher, type PublisherClaims } from "./pub
 /** Provisioning is not allowed, with a reason the deploy log shows. */
 export class ProvisionRefused extends Data.TaggedError("ProvisionRefused")<{ readonly reason: string }> {}
 
-/** The npm account an organization connected: its token and its authenticator-app secret. */
+/** The npm account an organization connected: a token from that person's npm login. */
 export interface NpmAccount {
   readonly token: string;
-  readonly secondFactor: { readonly type: "totp"; readonly secret: string };
 }
+
+/**
+ * npm wants its second factor before a write: a person answers it on `pageUrl`, npm's own page. The connector never
+ * answers it, and nothing here passes a person's answer back yet, so provisioning refuses with this page.
+ */
+export class SecondFactorRequired extends Data.TaggedError("SecondFactorRequired")<{
+  readonly operation: string;
+  readonly pageUrl: string;
+}> {}
 
 export interface CodeRepositoryRecord {
   readonly id: string;
@@ -45,15 +53,24 @@ export interface IProvisioningRecords {
 }
 export class ProvisioningRecords extends Context.Service<ProvisioningRecords, IProvisioningRecords>()("ProvisioningRecords") {}
 
-/** The organization's package-registry connector (jive-connector-package-registry-npm's functions). */
+/**
+ * The organization's package-registry connector (jive-resource-connector-package-registry-npm's functions). A write
+ * npm guards with its second factor fails with `SecondFactorRequired`.
+ */
 export interface IRegistryConnector {
   createPlaceholder(input: { readonly packageName: string; readonly account: NpmAccount }): Effect.Effect<
     { readonly status: "created"; readonly version: string } | { readonly status: "alreadyExists" } | { readonly status: "maintainedByAnotherAccount" },
-    Error
+    SecondFactorRequired | Error
   >;
   listTrustedPublishers(input: { readonly packageName: string; readonly account: NpmAccount }): Effect.Effect<ReadonlyArray<ListedPublisher>, Error>;
-  registerTrustedPublisher(input: { readonly packageName: string; readonly publisher: PublisherClaims; readonly account: NpmAccount }): Effect.Effect<void, Error>;
-  removeTrustedPublisher(input: { readonly packageName: string; readonly id: string; readonly account: NpmAccount }): Effect.Effect<void, Error>;
+  registerTrustedPublisher(input: { readonly packageName: string; readonly publisher: PublisherClaims; readonly account: NpmAccount }): Effect.Effect<
+    void,
+    SecondFactorRequired | Error
+  >;
+  removeTrustedPublisher(input: { readonly packageName: string; readonly id: string; readonly account: NpmAccount }): Effect.Effect<
+    void,
+    SecondFactorRequired | Error
+  >;
 }
 export class RegistryConnector extends Context.Service<RegistryConnector, IRegistryConnector>()("RegistryConnector") {}
 
@@ -90,6 +107,9 @@ export function provisionPackage(input: {
     if (Option.isNone(maybeHolder)) return { status: "inProgress" } as const;
     return yield* pipe(
       provisionClaimed({ ...input, repository, maybePackage }),
+      Effect.catchTag("SecondFactorRequired", ({ operation, pageUrl }) => Effect.fail(new ProvisionRefused({
+        reason: `npm asked for its second factor to ${operation}; a person answers it on ${pageUrl}, and Jive cannot pass that answer back to npm yet`,
+      }))),
       Effect.ensuring(records.release({ packageName, holder: maybeHolder.value })),
     );
   });
@@ -101,7 +121,7 @@ function provisionClaimed(input: {
   readonly now: number;
   readonly repository: CodeRepositoryRecord;
   readonly maybePackage: Option.Option<PackageRecord>;
-}): Effect.Effect<ProvisionOutcome, ProvisionRefused | Error, ProvisioningRecords | RegistryConnector> {
+}): Effect.Effect<ProvisionOutcome, ProvisionRefused | SecondFactorRequired | Error, ProvisioningRecords | RegistryConnector> {
   return Effect.gen(function* () {
     const records = yield* ProvisioningRecords;
     const connector = yield* RegistryConnector;

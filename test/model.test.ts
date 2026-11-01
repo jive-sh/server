@@ -5,6 +5,7 @@ import { PENDING_PUBLISHER_WINDOW_MS, planPublisher, type ListedPublisher, type 
 import {
   ProvisioningRecords,
   RegistryConnector,
+  SecondFactorRequired,
   provisionPackage,
   type IProvisioningRecords,
   type IRegistryConnector,
@@ -154,7 +155,7 @@ const caller: PipelineCaller = {
   environment: "latest",
   workflowFile: "pipeline.yml",
 };
-const account: NpmAccount = { token: "npm-token", secondFactor: { type: "totp", secret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" } };
+const account: NpmAccount = { token: "npm-token" };
 const PACKAGE = "@chaine.dance/jive-test-package";
 
 /** In-memory records and connector, logging every call in order. */
@@ -163,7 +164,7 @@ function fakes(input: {
   maybePackage?: Option.Option<PackageRecord>;
   connected?: boolean;
   claimHeld?: boolean;
-  placeholder?: "created" | "alreadyExists" | "maintainedByAnotherAccount";
+  placeholder?: "created" | "alreadyExists" | "maintainedByAnotherAccount" | "secondFactorRequired";
   listed?: ReadonlyArray<ListedPublisher>;
 }) {
   const calls: Array<string> = [];
@@ -179,9 +180,12 @@ function fakes(input: {
     recordProvisioned: ({ registeredPublisherFor }) => Effect.sync(() => void calls.push(`record ${Option.getOrElse(registeredPublisherFor, () => "-")}`)),
   };
   const connector: IRegistryConnector = {
-    createPlaceholder: () => Effect.sync(() => {
+    createPlaceholder: ({ packageName }) => Effect.suspend(() => {
       calls.push("createPlaceholder");
-      return input.placeholder === "created" ? { status: "created", version: "0.0.0" } as const : { status: input.placeholder ?? "alreadyExists" } as const;
+      if (input.placeholder === "secondFactorRequired") {
+        return Effect.fail(new SecondFactorRequired({ operation: `publish ${packageName}'s placeholder`, pageUrl: "https://www.npmjs.com/auth/cli/approve-1" }));
+      }
+      return Effect.succeed(input.placeholder === "created" ? { status: "created", version: "0.0.0" } as const : { status: input.placeholder ?? "alreadyExists" } as const);
     }),
     listTrustedPublishers: () => Effect.sync(() => {
       calls.push("listTrustedPublishers");
@@ -252,6 +256,12 @@ describe("provisionPackage", () => {
   test("refuses a package another npm account maintains, registering nothing", async () => {
     const { calls, run } = fakes({ placeholder: "maintainedByAnotherAccount" });
     expect(await refusedReason(await run())).toContain("does not maintain it");
+    expect(calls).toEqual(["claim", "createPlaceholder", "release holder-1"]);
+  });
+
+  test("refuses with npm's page when npm asks for its second factor, releasing the claim", async () => {
+    const { calls, run } = fakes({ placeholder: "secondFactorRequired" });
+    expect(await refusedReason(await run())).toContain("npm asked for its second factor to publish @chaine.dance/jive-test-package's placeholder; a person answers it on https://www.npmjs.com/auth/cli/approve-1");
     expect(calls).toEqual(["claim", "createPlaceholder", "release holder-1"]);
   });
 });

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -7,8 +6,8 @@ import { resolve } from "node:path";
  * `packages:provision` end to end, inside Convex's runtime: this package pushed to an anonymous local Convex
  * backend (no Convex account), called over Convex's HTTP API with RS256 tokens shaped like GitHub Actions ID
  * tokens and signed by a key this test generates, whose JWKS the deployment trusts in place of GitHub's
- * (`GITHUB_ACTIONS_JWKS`). The npm connector acts on a fake registry served here, which demands a TOTP code it
- * checks with Node's HMAC. Nothing here reaches npm or GitHub.
+ * (`GITHUB_ACTIONS_JWKS`). The npm connector acts on a fake registry served here, which guards every write with
+ * npm's web second-factor challenge, as npm does. Nothing here reaches npm or GitHub.
  */
 
 const SERVER_DIR = resolve(import.meta.dir, "..");
@@ -26,8 +25,6 @@ const ISSUER = "https://token.actions.githubusercontent.com";
 const AUDIENCE = "https://api.jive.sh";
 const PACKAGE = "@chaine.dance/jive-test-package";
 const NPM_TOKEN = "npm-test-token";
-/** The RFC 6238 test secret ("12345678901234567890") in base32. */
-const TOTP_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 const CONNECTION_KEY = `1:${btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))}`;
 const REPOSITORY = { repositoryId: "900001", repositoryOwnerId: "900002", owner: "chaine-dance", name: "jive-test-package" };
 
@@ -64,20 +61,11 @@ function base64Url(bytes: Uint8Array | string): string {
   return buffer.toString("base64url");
 }
 
-/** The fake registry's view of a TOTP code: this step's or an adjacent one's, computed independently. */
-function acceptedCode(code: string | null): boolean {
-  if (code === null) return false;
-  return [-1, 0, 1].some((offset) => {
-    const message = Buffer.alloc(8);
-    message.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000) + offset));
-    const mac = createHmac("sha1", "12345678901234567890").update(message).digest();
-    const at = mac[mac.length - 1]! & 0x0f;
-    return ((mac.readUInt32BE(at) & 0x7fffffff) % 1_000_000).toString().padStart(6, "0") === code;
-  });
-}
+/** The page npm names when it wants a person to answer its second factor, as the fake registry names it. */
+const SECOND_FACTOR_PAGE = "https://www.npmjs.com/auth/cli/approve-1";
 
 const npm = {
-  packages: new Map<string, Array<string>>(),
+  packages: new Map<string, { maintainers: Array<string>; publishedBy: Array<string> }>(),
   publishes: [] as Array<string>,
   trust: [] as Array<{ id: string; type: string; claims: any }>,
   trustRequests: 0,
@@ -147,13 +135,17 @@ beforeAll(async () => {
       const authorized = request.headers.get("authorization") === `Bearer ${NPM_TOKEN}`;
       const otp = request.headers.get("npm-otp");
       if (otp !== null) npm.oneTimePasswords.push(otp);
-      const challenge = () => Response.json({ error: "one-time password required" }, { status: 401, headers: { "www-authenticate": "OTP" } });
+      // npm's answer to a write sent with `npm-auth-type: web` and no one-time password: its page for a person.
+      const challenge = () => Response.json(
+        { authUrl: SECOND_FACTOR_PAGE, doneUrl: "https://registry.npmjs.org/-/v1/done?authId=1" },
+        { status: 401, headers: { "www-authenticate": "OTP" } },
+      );
       if (url.pathname === "/-/whoami") return authorized ? Response.json({ username: "jive-test-account" }) : new Response("no", { status: 401 });
       const trust = url.pathname.match(/^\/-\/package\/([^/]+)\/trust(?:\/([^/]+))?$/);
       if (trust !== null) {
         if (!authorized) return new Response("no", { status: 401 });
         if (request.method === "GET") return Response.json(npm.trust);
-        if (!acceptedCode(otp)) return challenge();
+        if (otp === null) return challenge();
         if (request.method === "DELETE") {
           npm.trust = npm.trust.filter((config) => config.id !== decodeURIComponent(trust[2]!));
           return new Response(null, { status: 204 });
@@ -165,16 +157,19 @@ beforeAll(async () => {
       }
       const name = decodeURIComponent(url.pathname.slice(1));
       if (request.method === "GET") {
-        const maintainers = npm.packages.get(name);
-        return maintainers === undefined
-          ? Response.json({ error: "Not found" }, { status: 404 })
-          : Response.json({ name, maintainers: maintainers.map((maintainer) => ({ name: maintainer })), versions: {} });
+        const record = npm.packages.get(name);
+        if (record === undefined) return Response.json({ error: "Not found" }, { status: 404 });
+        const versions = Object.fromEntries(record.publishedBy.map((oidcConfigId, index) => [
+          `0.0.${index + 1}`,
+          { _npmUser: { name: "GitHub Actions", trustedPublisher: { oidcConfigId } } },
+        ]));
+        return Response.json({ name, maintainers: record.maintainers.map((maintainer) => ({ name: maintainer })), versions });
       }
       if (request.method === "PUT") {
         if (!authorized) return new Response("no", { status: 401 });
-        if (!acceptedCode(otp)) return challenge();
+        if (otp === null) return challenge();
         npm.publishes.push(name);
-        npm.packages.set(name, ["jive-test-account"]);
+        npm.packages.set(name, { maintainers: ["jive-test-account"], publishedBy: [] });
         return Response.json({ ok: true });
       }
       return new Response("Not found", { status: 404 });
@@ -213,18 +208,17 @@ beforeAll(async () => {
   const seeded = JSON.parse(await convex(["run", "seed:organizationWithRepository", JSON.stringify({ organizationName: "jive-test", repository: REPOSITORY })]));
   expect(seeded.organizationId).toBeString();
 
-  // Connected the way a person does: `bun run connect-npm`, its two hidden answers piped in, checking the token
+  // Connected the way a person does: `bun run connect-npm`, its hidden answer piped in, checking the token
   // against the fake registry's /-/whoami.
   const connect = Bun.spawn(["bun", "run", "connect-npm", "--", "--organization", "jive-test", "--npm-registry", `http://127.0.0.1:${registry.port}`], {
     cwd: SERVER_DIR, env: LOCAL_ENV, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
-  connect.stdin.write(`${NPM_TOKEN}\notpauth://totp/npm:jive-test-account?secret=${TOTP_SECRET.toLowerCase()}&issuer=npm\n`);
+  connect.stdin.write(`${NPM_TOKEN}\n`);
   connect.stdin.end();
   const [connectOut, connectErr, connectExit] = await Promise.all([new Response(connect.stdout).text(), new Response(connect.stderr).text(), connect.exited]);
   expect(connectExit, connectErr).toBe(0);
   expect(`${connectOut}${connectErr}`).toContain("The token belongs to npm user jive-test-account");
   expect(`${connectOut}${connectErr}`).not.toContain(NPM_TOKEN);
-  expect(`${connectOut}${connectErr}`).not.toContain(TOTP_SECRET);
   expect(npm.oneTimePasswords).toEqual([]);
 }, TIMEOUT);
 
@@ -261,23 +255,27 @@ describe("who may call", () => {
 });
 
 describe("provisioning", () => {
-  test("a new package gets its placeholder and a publisher for pipeline.yml and its environment, answering npm's second factor", async () => {
-    expect(await provision(await idToken({}))).toMatchObject({ body: { status: "success", value: { status: "ready" } } });
-    expect(npm.publishes).toEqual([PACKAGE]);
-    expect(npm.trust).toEqual([{
+  test("a new package is refused with npm's second-factor page, publishing nothing, since nothing passes a person's answer back yet", async () => {
+    expect(await provision(await idToken({}))).toMatchObject({ body: { status: "success", value: {
+      status: "refused",
+      reason: `npm asked for its second factor to publish ${PACKAGE}'s placeholder; a person answers it on ${SECOND_FACTOR_PAGE}, and Jive cannot pass that answer back to npm yet`,
+    } } });
+    expect(npm.publishes).toEqual([]);
+    expect(npm.oneTimePasswords).toEqual([]);
+  }, TIMEOUT);
+
+  test("a package the account maintains, whose publisher for pipeline.yml and the environment has published, is ready with no write to npm", async () => {
+    npm.packages.set(PACKAGE, { maintainers: ["jive-test-account"], publishedBy: ["trust-1"] });
+    npm.trust = [{
       id: "trust-1",
       type: "github",
       claims: { repository: "chaine-dance/jive-test-package", workflow_ref: { file: "pipeline.yml" }, environment: "latest" },
-    }]);
-    expect(npm.oneTimePasswords.length).toBeGreaterThanOrEqual(2);
-  }, TIMEOUT);
-
-  test("calling again changes nothing on npm", async () => {
-    const before = npm.oneTimePasswords.length;
+    }];
+    expect(await provision(await idToken({}))).toMatchObject({ body: { status: "success", value: { status: "ready" } } });
     expect(await provision(await idToken({}))).toMatchObject({ body: { value: { status: "ready" } } });
-    expect(npm.publishes).toHaveLength(1);
-    expect(npm.trustRequests).toBe(1);
-    expect(npm.oneTimePasswords).toHaveLength(before);
+    expect(npm.publishes).toEqual([]);
+    expect(npm.trustRequests).toBe(0);
+    expect(npm.oneTimePasswords).toEqual([]);
   }, TIMEOUT);
 
   test("another deploy job's claim answers inProgress, and the package provisions once it is released", async () => {
@@ -301,16 +299,15 @@ describe("provisioning", () => {
     const complete = () => fetch(`${convexUrl}/api/action`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: "connections:completeNpmConnection", args: { requestId, token: NPM_TOKEN, totpSecret: TOTP_SECRET }, format: "json" }),
+      body: JSON.stringify({ path: "connections:completeNpmConnection", args: { requestId, token: NPM_TOKEN }, format: "json" }),
     }).then((response) => response.json());
     expect(await complete()).toMatchObject({ status: "success" });
     expect(await complete()).toMatchObject({ status: "error", errorMessage: expect.stringContaining("unknown, already used or expired") });
   }, TIMEOUT);
 
-  test("the npm token and authenticator secret are stored sealed, never in the clear", async () => {
+  test("the npm token is stored sealed, never in the clear", async () => {
     const stored = await convex(["run", "--inline-query", `return await ctx.db.query("connections").collect()`]);
     expect(stored).toContain("sealedCredential");
-    expect(stored).not.toContain(TOTP_SECRET);
     expect(stored).not.toContain(NPM_TOKEN);
   }, TIMEOUT);
 });

@@ -7,6 +7,7 @@ import { authorizePipelineCaller } from "./model/pipelineCaller";
 import {
   ProvisioningRecords,
   RegistryConnector,
+  SecondFactorRequired,
   provisionPackage,
   type IProvisioningRecords,
   type IRegistryConnector,
@@ -17,10 +18,11 @@ import { open, parseConnectionKey } from "./model/sealing";
 /** How long a provisioning's claim on a package lasts before another caller may take it over (§9). */
 const CLAIM_MS = 5 * 60 * 1000;
 
-const NpmCredential = Schema.fromJsonString(Schema.Struct({
-  token: Schema.String,
-  secondFactor: Schema.Struct({ type: Schema.Literal("totp"), secret: Schema.String }),
-}));
+/**
+ * The sealed npm credential. Connections stored before 0.2.0 also hold an authenticator secret, which nothing reads
+ * any more; decoding drops it.
+ */
+const NpmCredential = Schema.fromJsonString(Schema.Struct({ token: Schema.String }));
 
 /** Effect's wrapper around one Convex call; a function's failure becomes the Error it threw. */
 function call<A>(run: () => Promise<A>): Effect.Effect<A, Error> {
@@ -51,9 +53,9 @@ function recordsOver(ctx: ActionCtx): IProvisioningRecords {
       const credential = yield* pipe(
         Schema.decodeUnknownEffect(NpmCredential)(plaintext),
         // The schema error would quote the plaintext, which holds the credential.
-        Effect.mapError(() => new Error("the npm connection's credential is not { token, secondFactor }")),
+        Effect.mapError(() => new Error("the npm connection's credential is not { token }")),
       );
-      return Option.some<NpmAccount>(credential);
+      return Option.some<NpmAccount>({ token: credential.token });
     }),
     claim: (packageName) => pipe(
       call(() => ctx.runMutation(internal.packages.claim, { packageName, holder: crypto.randomUUID() })),
@@ -72,14 +74,40 @@ function recordsOver(ctx: ActionCtx): IProvisioningRecords {
   };
 }
 
+/**
+ * A write's answer, with npm's second-factor page turned into `SecondFactorRequired`. No one-time password is ever
+ * sent, so every write npm guards answers that.
+ */
+type SecondFactorAnswer = { readonly status: "secondFactorRequired"; readonly pageUrl: string; readonly resultUrl: string };
+
+function isSecondFactorAnswer(answer: { readonly status: string }): answer is SecondFactorAnswer {
+  return answer.status === "secondFactorRequired";
+}
+
+function answered<A extends { readonly status: string }>(
+  operation: string,
+  write: Effect.Effect<A, Error>,
+): Effect.Effect<Exclude<A, SecondFactorAnswer>, SecondFactorRequired | Error> {
+  return Effect.flatMap(write, (answer) => isSecondFactorAnswer(answer)
+    ? Effect.fail(new SecondFactorRequired({ operation, pageUrl: answer.pageUrl }))
+    // TypeScript does not narrow a generic union; the guard above removed this member.
+    : Effect.succeed(answer as Exclude<A, SecondFactorAnswer>));
+}
+
 /** The installed npm connector's functions. */
 function npmConnectorOver(ctx: ActionCtx): IRegistryConnector {
   const registry = components.packageRegistryNpm.packageRegistry;
   return {
-    createPlaceholder: (args) => call(() => ctx.runAction(registry.createPlaceholder, args)),
+    createPlaceholder: (args) => answered(`publish ${args.packageName}'s placeholder`, call(() => ctx.runAction(registry.createPlaceholder, args))),
     listTrustedPublishers: (args) => call(() => ctx.runAction(registry.listTrustedPublishers, args)),
-    registerTrustedPublisher: (args) => pipe(call(() => ctx.runAction(registry.registerTrustedPublisher, args)), Effect.asVoid),
-    removeTrustedPublisher: (args) => pipe(call(() => ctx.runAction(registry.removeTrustedPublisher, args)), Effect.asVoid),
+    registerTrustedPublisher: (args) => pipe(
+      answered(`register a trusted publisher on ${args.packageName}`, call(() => ctx.runAction(registry.registerTrustedPublisher, args))),
+      Effect.asVoid,
+    ),
+    removeTrustedPublisher: (args) => pipe(
+      answered(`remove trusted publisher ${args.id} from ${args.packageName}`, call(() => ctx.runAction(registry.removeTrustedPublisher, args))),
+      Effect.asVoid,
+    ),
   };
 }
 

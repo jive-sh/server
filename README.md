@@ -43,7 +43,7 @@ Any other failure is a function error, and the deploy fails without publishing.
    refused.
 2. **One at a time:** a mutation claims the package (`provisioningClaims`), so of two deploy jobs only one acts;
    the other gets `inProgress`. A claim lasts 5 minutes, so one left by a dead action is taken over.
-3. **Through the organization's npm connection** (`jive-connector-package-registry-npm`): create the `0.0.0`
+3. **Through the organization's npm connection** (`jive-resource-connector-package-registry-npm`): create the `0.0.0`
    placeholder if the package doesn't exist (refusing a package another npm account maintains); then make sure a
    trusted publisher for the repository, `pipeline.yml` and the job's environment can publish. A validated one,
    or one Jive registered less than 47 hours ago, is kept; an unvalidated one that is older or unknown to Jive may
@@ -51,14 +51,17 @@ Any other failure is a function error, and the deploy fails without publishing.
    again (`convex/model/publisherPlan.ts`).
 4. Record the package, its repository and when each environment's publisher was registered; release the claim.
 
-npm asks for the account's second factor before publishing the placeholder or changing trusted publishers; the
-connector answers with the current code from the account's authenticator-app (TOTP) secret.
+npm asks for the account's second factor before publishing the placeholder or changing trusted publishers. The
+connector never answers it: it hands back npm's own page, where a person answers. Nothing passes that answer back to
+npm yet, so a provisioning that needs a write answers `refused`, its reason naming the page; one that needs none (the
+package exists and its publisher has published) answers `ready`. The connection holds only the npm token
+(`bun run connect-npm`); a connection stored before 0.2.0 also holds an authenticator secret, which nothing reads.
 
 ## Records
 
 `convex/schema.ts`: `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`.
 
-A connection's credential (for npm: the token and the authenticator-app secret) is stored sealed, never in the
+A connection's credential (for npm: the token) is stored sealed, never in the
 clear: AES-256-GCM under `CONNECTION_KEY`, as `<nonce>.<ciphertext>` beside the key's version, the way
 `@jive-sh/app` seals connections (`convex/model/sealing.ts`). `CONNECTION_KEY` is `<version>:<base64 32 bytes>`,
 generated once per deployment by the backend abstract. Only internal functions read a connection, and only the
@@ -75,16 +78,14 @@ The organization and its repository, by GitHub's ids (none of it secret):
 bunx convex run seed:organizationWithRepository '{"organizationName":"…","repository":{"repositoryId":"…","repositoryOwnerId":"…","owner":"…","name":"…"}}' --deployment <deployment>
 ```
 
-The npm connection, so that neither the token nor the authenticator secret is ever on a command line or in shell
-history:
+The npm connection, so that the token is never on a command line or in shell history:
 
 ```sh
 bun run connect-npm -- --deployment <deployment> --organization <organization>
 ```
 
-It prompts for the npm access token and the authenticator setup secret (the base32 text, or the whole
-`otpauth://` URL from npm's QR code) without echoing either, and checks the token with npm's read-only
-`/-/whoami`; it never sends a one-time password to npm. It then has `convex run connections:openNpmConnectionRequest`
+It prompts for the npm access token without echoing it, and checks the token with npm's read-only `/-/whoami`; it
+never sends a one-time password to npm. It then has `convex run connections:openNpmConnectionRequest`
 issue a single-use request id, valid for 5 minutes and stored only as its SHA-256, and sends the credential with
 that id to the public action `connections:completeNpmConnection` in an HTTPS body. That action stores the credential
 sealed, replacing any npm connection the organization had, and spends the id.
@@ -95,12 +96,12 @@ sealed, replacing any npm connection the organization had, and spends the id.
 
 - `test/model.test.ts`: the caller checks, the publisher decisions, sealing, and the provisioning flow against
   in-memory records and connector.
-- `test/connect-npm.test.ts`: reading the authenticator secret (base32 or `otpauth://` URL, refusing what the
-  connector can't use) and the prompts' line handling.
+- `test/connect-npm.test.ts`: the hidden prompt's line handling.
 - `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account); the npm
-  connection made by running `connect-npm` with its answers piped in; `packages:provision` called over HTTP with
+  connection made by running `connect-npm` with the token piped in; `packages:provision` called over HTTP with
   RS256 tokens shaped like GitHub's and signed by a key the test generates, against a fake npm registry that
-  demands a TOTP code: a new package, a repeated call changing nothing, a held claim, refusals, a connection
+  guards every write with npm's web second-factor challenge: a new package refused with npm's page, a provisioned
+  package ready with no write, a repeated call changing nothing, a held claim, refusals, a connection
   request used twice, and that the stored credential is sealed.
 
 ## Not built yet

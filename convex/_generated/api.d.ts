@@ -24,7 +24,7 @@ export declare const api: {
     completeNpmConnection: FunctionReference<
       "action",
       "public",
-      { requestId: string; token: string; totpSecret: string },
+      { requestId: string; token: string },
       null
     >;
   };
@@ -146,5 +146,5 @@ export declare const internal: {
 };
 
 export declare const components: {
-  packageRegistryNpm: import("jive-connector-package-registry-npm/_generated/component.js").ComponentApi<"packageRegistryNpm">;
+  packageRegistryNpm: import("jive-resource-connector-package-registry-npm/_generated/component.js").ComponentApi<"packageRegistryNpm">;
 };

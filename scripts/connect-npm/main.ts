@@ -1,15 +1,14 @@
 import { parseArgs } from "node:util";
 import { Data, Effect, Schema, pipe } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
-import { parseAuthenticatorSecret } from "./authenticatorSecret";
 import { HiddenPrompts } from "./hiddenPrompt";
 
 /**
- * `bun run connect-npm -- --deployment <name> --organization <name>`: stores an organization's npm account (its
- * token and authenticator-app secret) on a Jive server deployment, sealed, without either ever appearing on a
- * command line or in shell history.
+ * `bun run connect-npm -- --deployment <name> --organization <name>`: stores an organization's npm account (a
+ * token from a person's npm login) on a Jive server deployment, sealed, without it ever appearing on a command line
+ * or in shell history.
  *
- * 1. Prompts for both without echoing them.
+ * 1. Prompts for the token without echoing it.
  * 2. Checks the token with npm's read-only `/-/whoami`. It never sends a one-time password to npm.
  * 3. Asks the deployment, through `convex run` (admin access, no secret in its arguments), for a single-use
  *    connection request.
@@ -63,7 +62,6 @@ const program = Effect.gen(function* () {
   const prompts = new HiddenPrompts();
   const token = (yield* prompts.ask("npm access token (hidden): ")).trim();
   if (token === "") return yield* new ConnectNpmFailed({ reason: "no token entered" });
-  const secret = yield* parseAuthenticatorSecret(yield* prompts.ask("Authenticator setup secret, or the otpauth:// URL (hidden): "));
 
   const client = yield* HttpClient.HttpClient;
   const whoami = yield* pipe(
@@ -92,7 +90,7 @@ const program = Effect.gen(function* () {
       HttpClientRequest.post(`${request.deploymentUrl}/api/action`),
       HttpClientRequest.bodyJsonUnsafe({
         path: "connections:completeNpmConnection",
-        args: { requestId: request.requestId, token, totpSecret: secret },
+        args: { requestId: request.requestId, token },
         format: "json",
       }),
     )),
