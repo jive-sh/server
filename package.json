@@ -43,7 +43,7 @@
       "runsOnPullRequests": true,
       "runsOn": "ubuntu-latest",
       "requiredSecrets": [
-        "CONVEX_DEPLOY_KEY",
+        "CONVEX_TEAM_ACCESS_TOKEN",
         "NPM_TOKEN"
       ]
     },
@@ -69,7 +69,13 @@
               }
             }
           },
-          "customDomains": []
+          "customDomains": [
+            {
+              "domain": "api.jive.sh",
+              "destination": "convexCloud",
+              "canonical": true
+            }
+          ]
         }
       },
       "afterDeploy": { "function": "ssh:migrateToAccountKeys" },

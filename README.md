@@ -257,11 +257,11 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
   compute resource kind.
 - The local SSH agent that forwards sign requests to `ssh:sign` (the client side; ozy-cli's signing agent still
   derives its key on the machine).
-- `api.jive.sh` as the deployment's domain: it still serves `@jive-sh/app`'s Worker.
 - Provisioning its own client package through Jive. Production is the deployment `adventurous-viper-740` (project
-  `jive-server`, reference `latest`), which the pipeline reaches with a production deploy key (`CONVEX_DEPLOY_KEY`,
-  design doc §11) allowed only `deployment:deploy`, `deployment:env:view`, `deployment:env:write` and the
-  `runInternal*` actions. The client `@jive-sh/server-client` is published with the `NPM_TOKEN` repository secret and
+  `jive-server`, reference `latest`), served at `https://api.jive.sh`, the custom domain the deploy registers
+  (`customDomains`, canonical for the Convex client API). The pipeline reaches it with the team access token
+  (`CONVEX_TEAM_ACCESS_TOKEN`), since only the Management API adds custom domains; until 0.8.0 it used a production
+  deploy key (design doc §11). The client `@jive-sh/server-client` is published with the `NPM_TOKEN` repository secret and
   `backend-convex.provisionWithJive: null`, without trusted publishing, until the npm connector can answer npm's
   second factor (Alex, 2026-10-31: "rely on npm tokens with no trusted publishing until Grok's work on a cloud based
   security key embedded in the npm connector is done").
