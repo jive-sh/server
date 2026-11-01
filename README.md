@@ -83,8 +83,8 @@ registered on that npm account. The connection is created once, in one of two wa
 
 `npmSessions` and `signingPasskey` check the Jive session and that repository, then call the component.
 `provision` reads the token from `accountKeys.npmConnection.token` and passes it to the npm connector's
-`resource.ensureInstance`. It never calls `accountKeys.npmConnection.sign`: npm accepts no assertion posted without a
-browser, so a person answers npm's second factor on npm's own page (below).
+`resource.ensureInstance`. How `provision` answers npm's second factor is decided by the auto npm work (Grok's and
+Alex's); today a write npm guards answers `personNeeded` with npm's page (below).
 
 ## How a pipeline calls it
 
@@ -127,7 +127,7 @@ it is `api.provision.default`. It takes `{ sessionToken, kind, instance }` and a
 | --- | --- |
 | `{ status: "ready", instanceId, instance }` | The instance exists; publish now, by trusted publishing. |
 | `{ status: "inProgress", retryAfterSeconds }` | Another deploy job is provisioning it; ask again after `retryAfterSeconds`. |
-| `{ status: "personNeeded", reason, url }` | npm wants a person's second factor on its page `url`, and no one finished it while `provision` waited. |
+| `{ status: "personNeeded", reason, url }` | npm wants a person's second factor on its page `url`. The connector's `resultUrl` stays inside the server. |
 | `{ status: "refused", reason }` | Don't publish; `reason` says what to change. |
 
 Any other failure is a function error, and the deploy fails without publishing.
@@ -161,18 +161,9 @@ calls. It is `provision` for kind `connector-package-registry`, in its older sha
    Its README has the details.
 
 npm asks for the account's second factor before publishing the placeholder or changing trusted publishers. The
-connector never answers it. It answers `personNeeded` with two addresses: npm's page for a person (`url`, npm's
-authUrl), and where npm hands the answer to a program (`resultUrl`, npm's doneUrl).
-
-`convex/model/packageRegistryNpm.ts` then:
-1. polls `resultUrl` every second for up to 10 seconds: 202 means no one has finished the page yet, and 200
-   `{ token }` gives the one-time password;
-2. once it has the password, calls `ensureInstance` again with `oneTimePassword`, up to 3 answers per provisioning
-   (a new package can meet the second factor for its placeholder and for each publisher change);
-3. on `ready` after an answer, calls `accountKeys.npmConnection.markRegistered`.
-
-Otherwise `provision` answers `personNeeded` with the page only; `resultUrl` stays inside the server. A provisioning
-that needs no write (the package exists and its publisher for the job has published) answers `ready` at once.
+connector never answers it: it hands back npm's own page, where a person answers, so `provision` answers
+`personNeeded`. A provisioning that needs no write (the package exists and its publisher for the job has published)
+answers `ready`.
 
 ## Records
 
@@ -251,10 +242,7 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
       isn't `{ packageName }`, an organization with no implementation configured, one with no npm connection, and
       another repository asking for the same package;
     - a pipeline's token is refused by a person's call;
-    - a new package no one answered npm's page for polls npm's doneUrl, answers `personNeeded` with the page only,
-      and publishes nothing;
-    - once a person has finished the page, the doneUrl's one-time password completes the provisioning (placeholder
-      and publisher written with it), and the connection is marked registered;
+    - a new package answers `personNeeded` with npm's page and publishes nothing;
     - a provisioned package is `ready` with no write, with the same `instanceId` on every call;
     - a held claim answers `inProgress`;
     - `packages:provision` gives the same answers in its older shape.
