@@ -4,6 +4,7 @@ import { Effect, Result } from "effect";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
+import { allowedOrigins } from "./model/androidApps";
 import { usernameFor } from "./model/naming";
 import { insertAccountSession } from "./model/sessions";
 import { approveSignInRequest } from "./model/signInRequests";
@@ -73,7 +74,8 @@ export const register = action({
     const party = await relyingParty();
     const spent = await ctx.runMutation(internal.auth.spendChallenge, { challengeHash: await sha256Hex(challenge), purpose: "registration" });
     if (spent === null || spent.registration === undefined) throw new ConvexError("This passkey prompt expired. Try again.");
-    const passkey = await run(verifyRegistration({ relyingParty: party, challenge, response: response as RegistrationResponseJSON }));
+    const expectedOrigins = await run(allowedOrigins({ relyingParty: party, response }));
+    const passkey = await run(verifyRegistration({ relyingParty: party, expectedOrigins, challenge, response: response as RegistrationResponseJSON }));
     const sessionToken = mintSecret(SESSION_TOKEN_PREFIX);
     const { expiresAt } = await ctx.runMutation(internal.auth.createAccount, {
       ...spent.registration,
@@ -108,7 +110,8 @@ export const signIn = action({
     const passkey = await ctx.runQuery(internal.auth.passkeyByCredentialId, { credentialId });
     // The same answer as a bad signature: whether a passkey is registered is not for an anonymous caller to learn.
     if (passkey === null) throw new ConvexError("That passkey is not registered with Jive.");
-    await run(verifyAuthentication({ relyingParty: party, challenge, response: response as AuthenticationResponseJSON, passkey }));
+    const expectedOrigins = await run(allowedOrigins({ relyingParty: party, response }));
+    await run(verifyAuthentication({ relyingParty: party, expectedOrigins, challenge, response: response as AuthenticationResponseJSON, passkey }));
     const sessionToken = mintSecret(SESSION_TOKEN_PREFIX);
     const opened = await ctx.runMutation(internal.auth.openSession, {
       accountId: passkey.accountId,

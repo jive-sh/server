@@ -45,6 +45,31 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  approvalDevices: {
+    document: {
+      accountId: Id<"accounts">;
+      createdAt: number;
+      expoPushToken: string;
+      label: string;
+      _id: Id<"approvalDevices">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "accountId"
+      | "createdAt"
+      | "expoPushToken"
+      | "label";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_account: ["accountId", "_creationTime"];
+      by_expo_push_token: ["expoPushToken", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   codeRepositories: {
     document: {
       name: string;

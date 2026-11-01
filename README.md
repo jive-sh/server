@@ -30,8 +30,12 @@ Each table has one function that writes it, `insertAccountSession` (`convex/mode
 starts with `resolveSession`, one that acts for a pipeline with `resolvePipelineSession`; neither accepts the other's
 token.
 
-Passkeys use relying party `jive.sh`, so a passkey made on any `*.jive.sh` page (skill-sync's included) works, and
-the only accepted origin is `https://${WEBSITE_DOMAIN}` (`convex/model/webAuthn.ts`). Ceremonies are verified in
+Passkeys use relying party `jive.sh`, so a passkey made on any `*.jive.sh` page (skill-sync's included) works. Two
+kinds of origin are accepted: `https://${WEBSITE_DOMAIN}` (`convex/model/webAuthn.ts`), and an Android app's
+`android:apk-key-hash:<signing certificate SHA-256, base64url>` when the website's `/.well-known/assetlinks.json`
+grants that app `delegate_permission/common.get_login_creds` (`convex/model/androidApps.ts`). The file is read only
+for a response claiming an app origin; `@jive-sh/app`'s deploy writes it from the signing keys EAS holds, so it is the
+one list of apps allowed to use Jive passkeys. Ceremonies are verified in
 actions with `@simplewebauthn/server`; what they record is written by one mutation, so no session exists without
 its account and passkey.
 
@@ -42,6 +46,7 @@ its account and passkey.
 | `accounts:me` | query | The session's account and passkeys, or null |
 | `sessions:signOut` | mutation | Revokes the presented session |
 | `signInRequests:open`, `:describe`, `:claim` | action, query, action | Sign a program in (below) |
+| `approvalDevices:enable`, `:disable`, `:list` | mutation, mutation, query | Turn phone approval on or off for a phone's Expo push token, and list the account's phones (below) |
 
 **A program signs in through a sign-in request**, since it holds no passkey: it calls `signInRequests:open` and keeps
 the claim secret; the person opens the `loginUrl` it returns (`https://jive.sh/login?request=<id>`) and signs in or
@@ -50,6 +55,20 @@ answers `approved` with a session token of its own. There is no confirmation cod
 signs in with the passkey. none of this code bullshit"). A request lasts 10 minutes and
 is claimed once. All of it is plain Convex, so a program calls it with `ConvexHttpClient` or
 `POST <deployment>/api/action`.
+
+**Phone approval.** Alex (2026-11-01): "once an account is registered someone can enable phone approval such that
+authn requests from cli will come to a signed in phone and if i approve on my phone then the session token will be
+granted to the requestor". The Jive app on a phone, signed in with the account's passkey, calls
+`approvalDevices:enable` with its Expo push token. A program names the account by passing its last session token,
+expired or not, as `signInRequests:open({ previousSessionToken })`; a revoked or unknown token names nobody. `open`
+then pushes the request to that account's phones through Expo's push service (`approvalDevices:pushSignInRequest`,
+scheduled from the same transaction) and answers `approvalDevices`, how many phones it pushes to. Tapping the
+notification opens the request in the app, whose passkey ceremony approves it through `auth:signIn`, exactly as the
+web page does, and the program's `claim` gets its session. The website keeps working for the same request. A handle
+(`jive login --account <handle>`) was rejected as the way to name the account: anyone knowing it could send that
+person approval prompts, and one mistaken tap would hand them a session. A phone Expo reports `DeviceNotRegistered`
+for is forgotten. `test/phone-approval.test.ts` runs the whole flow against a fake Expo push service and a fake
+`assetlinks.json`, with software passkeys for the desktop and the app.
 
 ## Signing with the account's SSH key
 

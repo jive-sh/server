@@ -14,7 +14,8 @@ import { fromBase64Url, toBase64Url } from "./tokens";
 /**
  * Passkey ceremonies through `@simplewebauthn/server` (Web Crypto only), run in actions. The relying party is
  * the website's registrable domain, `jive.sh` in production, so the passkeys skill-sync registered on
- * `*.jive.sh` pages work here too, and the only accepted origin is the website's own.
+ * `*.jive.sh` pages work here too. The accepted origins are the website's own and the Android apps its asset links
+ * grant its passkeys to (`androidApps.ts`).
  *
  * Every passkey is discoverable (`residentKey: "required"`), so signing in needs no username, and user
  * verification is required, so a sign-in proves a person, not only a device.
@@ -71,6 +72,8 @@ export function registrationOptions(input: {
 
 export function verifyRegistration(input: {
   readonly relyingParty: RelyingParty;
+  /** The website's origin, plus any app origins `allowedOrigins` (androidApps.ts) admits for this response. */
+  readonly expectedOrigins: ReadonlyArray<string>;
   readonly challenge: string;
   readonly response: RegistrationResponseJSON;
 }): Effect.Effect<{ readonly credentialId: string; readonly publicKey: string }, CeremonyFailed> {
@@ -79,7 +82,7 @@ export function verifyRegistration(input: {
       try: () => verifyRegistrationResponse({
         response: input.response,
         expectedChallenge: input.challenge,
-        expectedOrigin: input.relyingParty.origin,
+        expectedOrigin: [...input.expectedOrigins],
         expectedRPID: input.relyingParty.id,
         requireUserVerification: true,
       }),
@@ -110,6 +113,7 @@ export function authenticationOptions(input: {
 
 export function verifyAuthentication(input: {
   readonly relyingParty: RelyingParty;
+  readonly expectedOrigins: ReadonlyArray<string>;
   readonly challenge: string;
   readonly response: AuthenticationResponseJSON;
   readonly passkey: { readonly credentialId: string; readonly publicKey: string };
@@ -119,7 +123,7 @@ export function verifyAuthentication(input: {
       try: () => verifyAuthenticationResponse({
         response: input.response,
         expectedChallenge: input.challenge,
-        expectedOrigin: input.relyingParty.origin,
+        expectedOrigin: [...input.expectedOrigins],
         expectedRPID: input.relyingParty.id,
         requireUserVerification: true,
         // Always zero: no counter is kept (see `passkeys` in the schema).

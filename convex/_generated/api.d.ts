@@ -32,6 +32,26 @@ export declare const api: {
       }
     >;
   };
+  approvalDevices: {
+    disable: FunctionReference<
+      "mutation",
+      "public",
+      { expoPushToken: string; sessionToken: string },
+      null
+    >;
+    enable: FunctionReference<
+      "mutation",
+      "public",
+      { expoPushToken: string; label: string; sessionToken: string },
+      null
+    >;
+    list: FunctionReference<
+      "query",
+      "public",
+      { sessionToken: string },
+      null | Array<{ createdAt: number; expoPushToken: string; label: string }>
+    >;
+  };
   auth: {
     register: FunctionReference<
       "action",
@@ -167,8 +187,9 @@ export declare const api: {
     open: FunctionReference<
       "action",
       "public",
-      {},
+      { previousSessionToken?: string },
       {
+        approvalDevices: number;
         claimSecret: string;
         expiresAt: number;
         loginUrl: string;
@@ -207,6 +228,26 @@ export declare const api: {
  * ```
  */
 export declare const internal: {
+  approvalDevices: {
+    forgetUnregistered: FunctionReference<
+      "mutation",
+      "internal",
+      { expoPushTokens: Array<string> },
+      null
+    >;
+    pushSignInRequest: FunctionReference<
+      "action",
+      "internal",
+      { accountId: Id<"accounts">; expiresAt: number; requestId: string },
+      null
+    >;
+    pushTargets: FunctionReference<
+      "query",
+      "internal",
+      { accountId: Id<"accounts"> },
+      { expoPushTokens: Array<string>; username: string }
+    >;
+  };
   auth: {
     createAccount: FunctionReference<
       "mutation",
@@ -401,8 +442,8 @@ export declare const internal: {
     store: FunctionReference<
       "mutation",
       "internal",
-      { claimSecretHash: string },
-      { expiresAt: number; requestId: string }
+      { claimSecretHash: string; previousSessionTokenHash?: string },
+      { approvalDevices: number; expiresAt: number; requestId: string }
     >;
   };
   ssh: {

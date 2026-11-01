@@ -100,6 +100,19 @@ export default defineSchema({
     expiresAt: v.number(),
   }),
 
+  /**
+   * A phone that approves the account's program sign-ins: the Jive app on it, signed in, turned on phone approval
+   * and registered its Expo push token. Each sign-in request opened for the account is pushed to it
+   * (`approvalDevices.ts`). A token Expo reports as no longer registered is deleted.
+   */
+  approvalDevices: defineTable({
+    accountId: v.id("accounts"),
+    expoPushToken: v.string(),
+    /** What the phone calls itself (`Pixel 9`), shown in the account's device list. */
+    label: v.string(),
+    createdAt: v.number(),
+  }).index("by_account", ["accountId"]).index("by_expo_push_token", ["expoPushToken"]),
+
   organizations: defineTable({
     name: v.string(),
   }).index("by_name", ["name"]),

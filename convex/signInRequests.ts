@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { Effect } from "effect";
 import { internal } from "./_generated/api";
-import { action, internalMutation, query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { action, internalMutation, query, type DatabaseReader } from "./_generated/server";
 import { insertAccountSession } from "./model/sessions";
 import { SIGN_IN_REQUEST_MS } from "./model/signInRequests";
 import { CLAIM_SECRET_PREFIX, SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
@@ -23,29 +24,56 @@ import { relyingPartyOf } from "./model/webAuthn";
  */
 
 export const open = action({
-  args: {},
-  returns: v.object({ requestId: v.string(), claimSecret: v.string(), loginUrl: v.string(), expiresAt: v.number() }),
-  handler: async (ctx) => {
+  args: {
+    /**
+     * The program's last session token, expired or not, which names the account whose approval devices the
+     * request is pushed to (`approvalDevices.ts`). A revoked or unknown token pushes to nobody. A handle would not
+     * do: anyone knowing it could send that person approval prompts, and one mistaken tap would hand them a session.
+     */
+    previousSessionToken: v.optional(v.string()),
+  },
+  returns: v.object({
+    requestId: v.string(),
+    claimSecret: v.string(),
+    loginUrl: v.string(),
+    expiresAt: v.number(),
+    /** How many phones the request was pushed to, so the program can say to approve it there. */
+    approvalDevices: v.number(),
+  }),
+  handler: async (ctx, { previousSessionToken }) => {
     const relyingParty = await Effect.runPromise(relyingPartyOf(process.env.WEBSITE_DOMAIN));
     const claimSecret = mintSecret(CLAIM_SECRET_PREFIX);
-    const { requestId, expiresAt } = await ctx.runMutation(internal.signInRequests.store, {
+    const { requestId, expiresAt, approvalDevices } = await ctx.runMutation(internal.signInRequests.store, {
       claimSecretHash: await sha256Hex(claimSecret),
+      ...(previousSessionToken === undefined ? {} : { previousSessionTokenHash: await sha256Hex(previousSessionToken) }),
     });
-    return { requestId, claimSecret, loginUrl: `${relyingParty.origin}/login?request=${requestId}`, expiresAt };
+    return { requestId, claimSecret, loginUrl: `${relyingParty.origin}/login?request=${requestId}`, expiresAt, approvalDevices };
   },
 });
 
 export const store = internalMutation({
-  args: { claimSecretHash: v.string() },
-  returns: v.object({ requestId: v.string(), expiresAt: v.number() }),
-  handler: async (ctx, args) => {
+  args: { claimSecretHash: v.string(), previousSessionTokenHash: v.optional(v.string()) },
+  returns: v.object({ requestId: v.string(), expiresAt: v.number(), approvalDevices: v.number() }),
+  handler: async (ctx, { claimSecretHash, previousSessionTokenHash }) => {
     const expiresAt = Date.now() + SIGN_IN_REQUEST_MS;
-    const id = await ctx.db.insert("signInRequests", { ...args, expiresAt });
+    const id = await ctx.db.insert("signInRequests", { claimSecretHash, expiresAt });
     // Anyone may open a request, so each is deleted when it expires. An unclaimed one granted nothing.
     await ctx.scheduler.runAt(expiresAt, internal.signInRequests.deleteRequest, { id });
-    return { requestId: id, expiresAt };
+    const maybeAccountId = previousSessionTokenHash === undefined ? undefined : await accountOfPreviousSession(ctx.db, previousSessionTokenHash);
+    if (maybeAccountId === undefined) return { requestId: id, expiresAt, approvalDevices: 0 };
+    const devices = await ctx.db.query("approvalDevices").withIndex("by_account", (q) => q.eq("accountId", maybeAccountId)).collect();
+    if (devices.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.approvalDevices.pushSignInRequest, { accountId: maybeAccountId, requestId: id, expiresAt });
+    }
+    return { requestId: id, expiresAt, approvalDevices: devices.length };
   },
 });
+
+/** The account a session token was issued to, expired or not; undefined when it is unknown or was revoked. */
+async function accountOfPreviousSession(db: DatabaseReader, tokenHash: string): Promise<Id<"accounts"> | undefined> {
+  const session = await db.query("sessions").withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash)).unique();
+  return session === null || session.revokedAt !== undefined ? undefined : session.accountId;
+}
 
 export const deleteRequest = internalMutation({
   args: { id: v.id("signInRequests") },
