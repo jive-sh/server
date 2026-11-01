@@ -95,36 +95,6 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
-  connections: {
-    document: {
-      connector: "npm";
-      createdAt: number;
-      keyVersion: number;
-      organizationId: Id<"organizations">;
-      sealedCredential: string;
-      _id: Id<"connections">;
-      _creationTime: number;
-    };
-    fieldPaths:
-      | "_creationTime"
-      | "_id"
-      | "connector"
-      | "createdAt"
-      | "keyVersion"
-      | "organizationId"
-      | "sealedCredential";
-    indexes: {
-      by_id: ["_id"];
-      by_creation_time: ["_creationTime"];
-      by_organization_and_connector: [
-        "organizationId",
-        "connector",
-        "_creationTime",
-      ];
-    };
-    searchIndexes: {};
-    vectorIndexes: {};
-  };
   organizations: {
     document: { name: string; _id: Id<"organizations">; _creationTime: number };
     fieldPaths: "_creationTime" | "_id" | "name";
@@ -132,32 +102,6 @@ export type DataModel = {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
       by_name: ["name", "_creationTime"];
-    };
-    searchIndexes: {};
-    vectorIndexes: {};
-  };
-  packages: {
-    document: {
-      codeRepositoryId: Id<"codeRepositories">;
-      lastProvisionedAt: number;
-      name: string;
-      registry: "npm";
-      trustedPublishers: Array<{ environment: string; registeredAt: number }>;
-      _id: Id<"packages">;
-      _creationTime: number;
-    };
-    fieldPaths:
-      | "_creationTime"
-      | "_id"
-      | "codeRepositoryId"
-      | "lastProvisionedAt"
-      | "name"
-      | "registry"
-      | "trustedPublishers";
-    indexes: {
-      by_id: ["_id"];
-      by_creation_time: ["_creationTime"];
-      by_registry_and_name: ["registry", "name", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};
@@ -219,26 +163,20 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
-  provisioningClaims: {
+  resourceImplementations: {
     document: {
-      expiresAt: number;
-      holder: string;
-      packageName: string;
-      registry: "npm";
-      _id: Id<"provisioningClaims">;
+      implementation: string;
+      kind: string;
+      organizationId: Id<"organizations">;
+      _id: Id<"resourceImplementations">;
       _creationTime: number;
     };
     fieldPaths:
-      | "_creationTime"
-      | "_id"
-      | "expiresAt"
-      | "holder"
-      | "packageName"
-      | "registry";
+      "_creationTime" | "_id" | "implementation" | "kind" | "organizationId";
     indexes: {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
-      by_registry_and_package: ["registry", "packageName", "_creationTime"];
+      by_organization_and_kind: ["organizationId", "kind", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};

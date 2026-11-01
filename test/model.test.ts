@@ -1,19 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Exit, Layer, Option, pipe } from "effect";
-import type { Id } from "../convex/_generated/dataModel";
+import { Effect, Exit, pipe } from "effect";
 import { authorizePipelineCaller } from "../convex/model/pipelineCaller";
-import type { PipelineSession } from "../convex/model/pipelineSessions";
-import { PENDING_PUBLISHER_WINDOW_MS, planPublisher, type ListedPublisher, type PublisherClaims } from "../convex/model/publisherPlan";
-import {
-  ProvisioningRecords,
-  RegistryConnector,
-  SecondFactorRequired,
-  provisionPackage,
-  type IProvisioningRecords,
-  type IRegistryConnector,
-  type NpmAccount,
-  type PackageRecord,
-} from "../convex/model/provisioning";
 import { open, parseConnectionKey, seal } from "../convex/model/sealing";
 
 /** The claims GitHub puts in a deploy job's ID token, as Convex hands them to a function. */
@@ -82,44 +69,6 @@ describe("authorizePipelineCaller", () => {
   });
 });
 
-const wanted: PublisherClaims = {
-  provider: "github",
-  repository: { owner: "chaine-dance", name: "jive-test-package" },
-  workflowFile: "pipeline.yml",
-  environment: "latest",
-};
-const NOW = 1_800_000_000_000;
-
-describe("planPublisher", () => {
-  test("registers when no publisher matches", () => {
-    const other: ListedPublisher = { id: "p1", claims: { ...wanted, environment: "next" }, status: "validated" };
-    expect(planPublisher({ listed: [other], wanted, maybeRegisteredAt: Option.none(), now: NOW })).toEqual({ action: "register", removeIds: [] });
-  });
-
-  test("keeps a validated publisher, matching owner and name case-insensitively", () => {
-    const listed: ListedPublisher = { id: "p1", claims: { ...wanted, repository: { owner: "Chaine-Dance", name: "Jive-Test-Package" } }, status: "validated" };
-    expect(planPublisher({ listed: [listed], wanted, maybeRegisteredAt: Option.none(), now: NOW })).toEqual({ action: "keep" });
-  });
-
-  test("keeps an unvalidated publisher Jive registered inside the window", () => {
-    const listed: ListedPublisher = { id: "p1", claims: wanted, status: "unvalidated" };
-    const registeredAt = NOW - PENDING_PUBLISHER_WINDOW_MS + 1;
-    expect(planPublisher({ listed: [listed], wanted, maybeRegisteredAt: Option.some(registeredAt), now: NOW })).toEqual({ action: "keep" });
-  });
-
-  test("replaces an unvalidated publisher registered too long ago, which npm may have expired", () => {
-    const listed: ListedPublisher = { id: "p1", claims: wanted, status: "unvalidated" };
-    const registeredAt = NOW - PENDING_PUBLISHER_WINDOW_MS;
-    expect(planPublisher({ listed: [listed], wanted, maybeRegisteredAt: Option.some(registeredAt), now: NOW }))
-      .toEqual({ action: "register", removeIds: ["p1"] });
-  });
-
-  test("replaces an unvalidated publisher Jive has no record of registering", () => {
-    const listed: ListedPublisher = { id: "p1", claims: wanted, status: "unvalidated" };
-    expect(planPublisher({ listed: [listed], wanted, maybeRegisteredAt: Option.none(), now: NOW })).toEqual({ action: "register", removeIds: ["p1"] });
-  });
-});
-
 describe("sealing", () => {
   const CONNECTION_KEY = `1:${btoa(String.fromCharCode(...new Uint8Array(32).fill(7)))}`;
 
@@ -147,115 +96,5 @@ describe("sealing", () => {
       const exit = await Effect.runPromiseExit(parseConnectionKey(value));
       expect(Exit.isFailure(exit)).toBe(true);
     }
-  });
-});
-
-const pipeline: PipelineSession = {
-  codeRepositoryId: "repo-1" as Id<"codeRepositories">,
-  organizationId: "org-1" as Id<"organizations">,
-  repository: { owner: "chaine-dance", name: "jive-test-package" },
-  environment: "latest",
-  workflowFile: "pipeline.yml",
-};
-const account: NpmAccount = { token: "npm-token" };
-const PACKAGE = "@chaine.dance/jive-test-package";
-
-/** In-memory records and connector, logging every call in order. */
-function fakes(input: {
-  maybePackage?: Option.Option<PackageRecord>;
-  connected?: boolean;
-  claimHeld?: boolean;
-  placeholder?: "created" | "alreadyExists" | "maintainedByAnotherAccount" | "secondFactorRequired";
-  listed?: ReadonlyArray<ListedPublisher>;
-}) {
-  const calls: Array<string> = [];
-  const records: IProvisioningRecords = {
-    findPackage: () => Effect.succeed(input.maybePackage ?? Option.none()),
-    npmAccount: () => Effect.succeed(input.connected === false ? Option.none() : Option.some(account)),
-    claim: () => Effect.sync(() => {
-      calls.push("claim");
-      return input.claimHeld === true ? Option.none() : Option.some("holder-1");
-    }),
-    release: ({ holder }) => Effect.sync(() => void calls.push(`release ${holder}`)),
-    recordProvisioned: ({ registeredPublisherFor }) => Effect.sync(() => void calls.push(`record ${Option.getOrElse(registeredPublisherFor, () => "-")}`)),
-  };
-  const connector: IRegistryConnector = {
-    createPlaceholder: ({ packageName }) => Effect.suspend(() => {
-      calls.push("createPlaceholder");
-      if (input.placeholder === "secondFactorRequired") {
-        return Effect.fail(new SecondFactorRequired({ operation: `publish ${packageName}'s placeholder`, pageUrl: "https://www.npmjs.com/auth/cli/approve-1" }));
-      }
-      return Effect.succeed(input.placeholder === "created" ? { status: "created", version: "0.0.0" } as const : { status: input.placeholder ?? "alreadyExists" } as const);
-    }),
-    listTrustedPublishers: () => Effect.sync(() => {
-      calls.push("listTrustedPublishers");
-      return input.listed ?? [];
-    }),
-    registerTrustedPublisher: ({ publisher }) => Effect.sync(() => void calls.push(`register ${publisher.environment}`)),
-    removeTrustedPublisher: ({ id }) => Effect.sync(() => void calls.push(`remove ${id}`)),
-  };
-  const layer = Layer.mergeAll(Layer.succeed(ProvisioningRecords, records), Layer.succeed(RegistryConnector, connector));
-  const run = () => Effect.runPromiseExit(pipe(provisionPackage({ pipeline, packageName: PACKAGE, now: NOW }), Effect.provide(layer)));
-  return { calls, run };
-}
-
-describe("provisionPackage", () => {
-  test("a new package: placeholder, publisher for the job's environment, recorded, claim released", async () => {
-    const { calls, run } = fakes({ placeholder: "created" });
-    expect(await run()).toEqual(Exit.succeed({ status: "ready" }));
-    expect(calls).toEqual(["claim", "createPlaceholder", "listTrustedPublishers", "register latest", "record latest", "release holder-1"]);
-  });
-
-  test("an already provisioned package with a validated publisher changes nothing on npm", async () => {
-    const { calls, run } = fakes({
-      maybePackage: Option.some({ codeRepositoryId: "repo-1", trustedPublishers: [{ environment: "latest", registeredAt: NOW - 1000 }] }),
-      listed: [{ id: "p1", claims: { provider: "github", repository: pipeline.repository, workflowFile: "pipeline.yml", environment: "latest" }, status: "validated" }],
-    });
-    expect(await run()).toEqual(Exit.succeed({ status: "ready" }));
-    expect(calls).toEqual(["claim", "createPlaceholder", "listTrustedPublishers", "record -", "release holder-1"]);
-  });
-
-  test("an expired publisher is removed and registered again", async () => {
-    const { calls, run } = fakes({
-      maybePackage: Option.some({ codeRepositoryId: "repo-1", trustedPublishers: [{ environment: "latest", registeredAt: NOW - 3 * 24 * 60 * 60 * 1000 }] }),
-      listed: [{ id: "p1", claims: { provider: "github", repository: pipeline.repository, workflowFile: "pipeline.yml", environment: "latest" }, status: "unvalidated" }],
-    });
-    expect(await run()).toEqual(Exit.succeed({ status: "ready" }));
-    expect(calls).toEqual(["claim", "createPlaceholder", "listTrustedPublishers", "remove p1", "register latest", "record latest", "release holder-1"]);
-  });
-
-  test("another job's claim answers inProgress without touching npm", async () => {
-    const { calls, run } = fakes({ claimHeld: true });
-    expect(await run()).toEqual(Exit.succeed({ status: "inProgress" }));
-    expect(calls).toEqual(["claim"]);
-  });
-
-  async function refusedReason(exit: Exit.Exit<unknown, unknown>): Promise<string> {
-    expect(Exit.isFailure(exit)).toBe(true);
-    return JSON.stringify(exit);
-  }
-
-  test("refuses a package bound to another repository", async () => {
-    const { calls, run } = fakes({ maybePackage: Option.some({ codeRepositoryId: "repo-2", trustedPublishers: [] }) });
-    expect(await refusedReason(await run())).toContain("is provisioned for another code repository");
-    expect(calls).toEqual([]);
-  });
-
-  test("refuses when the organization has no npm connection, releasing the claim", async () => {
-    const { calls, run } = fakes({ connected: false });
-    expect(await refusedReason(await run())).toContain("has not connected an npm account");
-    expect(calls).toEqual(["claim", "release holder-1"]);
-  });
-
-  test("refuses a package another npm account maintains, registering nothing", async () => {
-    const { calls, run } = fakes({ placeholder: "maintainedByAnotherAccount" });
-    expect(await refusedReason(await run())).toContain("does not maintain it");
-    expect(calls).toEqual(["claim", "createPlaceholder", "release holder-1"]);
-  });
-
-  test("refuses with npm's page when npm asks for its second factor, releasing the claim", async () => {
-    const { calls, run } = fakes({ placeholder: "secondFactorRequired" });
-    expect(await refusedReason(await run())).toContain("npm asked for its second factor to publish @chaine.dance/jive-test-package's placeholder; a person answers it on https://www.npmjs.com/auth/cli/approve-1");
-    expect(calls).toEqual(["claim", "createPlaceholder", "release holder-1"]);
   });
 });

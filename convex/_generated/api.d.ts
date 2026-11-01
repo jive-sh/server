@@ -111,6 +111,17 @@ export declare const api: {
       | { reason: string; status: "refused" }
     >;
   };
+  provision: {
+    default: FunctionReference<
+      "action",
+      "public",
+      { instance: any; kind: string; sessionToken: string },
+      | { instance: any; instanceId: string; status: "ready" }
+      | { retryAfterSeconds: number; status: "inProgress" }
+      | { reason: string; status: "personNeeded"; url: string }
+      | { reason: string; status: "refused" }
+    >;
+  };
   sessions: {
     signOut: FunctionReference<
       "mutation",
@@ -273,22 +284,6 @@ export declare const internal: {
       { requestHash: string },
       null | Id<"organizations">
     >;
-    replaceNpmConnection: FunctionReference<
-      "mutation",
-      "internal",
-      {
-        keyVersion: number;
-        organizationId: Id<"organizations">;
-        sealedCredential: string;
-      },
-      null
-    >;
-    sealedNpmConnection: FunctionReference<
-      "query",
-      "internal",
-      { organizationId: Id<"organizations"> },
-      null | { keyVersion: number; sealedCredential: string }
-    >;
     storeNpmConnectionRequest: FunctionReference<
       "mutation",
       "internal",
@@ -302,39 +297,6 @@ export declare const internal: {
       "internal",
       { repositoryName: string; repositoryOwner: string; sessionToken: string },
       null | string
-    >;
-  };
-  packages: {
-    claim: FunctionReference<
-      "mutation",
-      "internal",
-      { holder: string; packageName: string },
-      null | string
-    >;
-    packageByName: FunctionReference<
-      "query",
-      "internal",
-      { packageName: string },
-      null | {
-        codeRepositoryId: string;
-        trustedPublishers: Array<{ environment: string; registeredAt: number }>;
-      }
-    >;
-    recordProvisioned: FunctionReference<
-      "mutation",
-      "internal",
-      {
-        codeRepositoryId: Id<"codeRepositories">;
-        packageName: string;
-        registeredPublisherFor?: string;
-      },
-      null
-    >;
-    release: FunctionReference<
-      "mutation",
-      "internal",
-      { holder: string; packageName: string },
-      null
     >;
   };
   pipelineSessions: {
@@ -372,6 +334,20 @@ export declare const internal: {
       }
     >;
   };
+  provision: {
+    configuredImplementation: FunctionReference<
+      "query",
+      "internal",
+      { kind: string; organizationId: Id<"organizations"> },
+      { implementation: null | string; organizationName: string }
+    >;
+    isPersonSession: FunctionReference<
+      "query",
+      "internal",
+      { sessionToken: string },
+      boolean
+    >;
+  };
   seed: {
     accountWithPasskey: FunctionReference<
       "mutation",
@@ -400,6 +376,12 @@ export declare const internal: {
         codeRepositoryId: Id<"codeRepositories">;
         organizationId: Id<"organizations">;
       }
+    >;
+    resourceImplementation: FunctionReference<
+      "mutation",
+      "internal",
+      { implementation: string; kind: string; organizationName: string },
+      null
     >;
   };
   signInRequests: {

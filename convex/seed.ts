@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { usernameFor } from "./model/naming";
+import { resourceKindNamed } from "./model/resourceKinds";
 
 /**
  * Scaffolding until `organizations.create` and `codeRepositories.provision` exist (design doc §3, §12 step 3):
@@ -56,5 +57,31 @@ export const accountWithPasskey = internalMutation({
     const accountId = await ctx.db.insert("accounts", { username, webAuthnUserId, createdAt: Date.now() });
     await ctx.db.insert("passkeys", { accountId, credentialId, publicKey, createdAt: passkeyCreatedAt });
     return { username, created: true };
+  },
+});
+
+/**
+ * Scaffolding until organizations configure resources themselves: sets the one implementation the organization uses
+ * for a resource kind (`resourceImplementations`), with `convex run seed:resourceImplementation`. Refuses a kind or an
+ * implementation this server hasn't installed. Idempotent: it replaces the organization's earlier choice for the kind.
+ */
+export const resourceImplementation = internalMutation({
+  args: { organizationName: v.string(), kind: v.string(), implementation: v.string() },
+  returns: v.null(),
+  handler: async (ctx, { organizationName, kind, implementation }) => {
+    const resourceKind = resourceKindNamed(kind);
+    if (resourceKind === undefined) throw new Error(`"${kind}" is not a resource kind this server knows`);
+    if (!resourceKind.implementations.some(({ packageName }) => packageName === implementation)) {
+      throw new Error(`${implementation} is not an installed implementation of ${kind}`);
+    }
+    const organization = await ctx.db.query("organizations").withIndex("by_name", (q) => q.eq("name", organizationName)).unique();
+    if (organization === null) throw new Error(`no organization is named ${organizationName}`);
+    const existing = await ctx.db
+      .query("resourceImplementations")
+      .withIndex("by_organization_and_kind", (q) => q.eq("organizationId", organization._id).eq("kind", kind))
+      .unique();
+    if (existing !== null) await ctx.db.patch(existing._id, { implementation });
+    else await ctx.db.insert("resourceImplementations", { organizationId: organization._id, kind, implementation });
+    return null;
   },
 });

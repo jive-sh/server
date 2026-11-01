@@ -1,13 +1,11 @@
 import { v } from "convex/values";
-import { Effect, pipe } from "effect";
-import { internal } from "./_generated/api";
-import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { sealWithDeploymentKey } from "./model/sealing";
+import { components, internal } from "./_generated/api";
+import { action, internalAction, internalMutation } from "./_generated/server";
 import { mintSecret, sha256Hex } from "./model/tokens";
 
 /**
- * Connections hold an organization's credentials for an outside system, sealed under `CONNECTION_KEY`. No client
- * can read a credential back.
+ * An organization's npm connection is held sealed by the `accountKeys` component (`npmConnection`), which
+ * `provision` reads it from. No client can read a credential back.
  *
  * Connecting npm is scaffolding until `connections.create` exists (design doc §3), and is what `bun run
  * connect-npm` drives: a deployment admin asks `openNpmConnectionRequest` (through `convex run`, which carries no
@@ -59,9 +57,9 @@ export const redeemNpmConnectionRequest = internalMutation({
 });
 
 /**
- * Stores the organization's npm account, sealed: a token from that person's npm login. Public, but it acts only with an unexpired request id from
- * `openNpmConnectionRequest`, which it spends. Replaces any npm connection the organization had. Never logs or
- * returns the credential.
+ * Stores the organization's npm account in `accountKeys`, sealed: a token from that person's npm login. Public, but
+ * it acts only with an unexpired request id from `openNpmConnectionRequest`, which it spends. Replaces any npm
+ * connection the organization had. Never logs or returns the credential.
  */
 export const completeNpmConnection = action({
   args: { requestId: v.string(), token: v.string() },
@@ -70,36 +68,7 @@ export const completeNpmConnection = action({
     const organizationId = await ctx.runMutation(internal.connections.redeemNpmConnectionRequest, { requestHash: await sha256Hex(requestId) });
     if (organizationId === null) throw new Error("the connection request is unknown, already used or expired; run connect-npm again");
     if (token.trim() === "") throw new Error("the npm token is empty");
-    const credential = JSON.stringify({ token });
-    const { sealed, keyVersion } = await Effect.runPromise(pipe(sealWithDeploymentKey(credential), Effect.mapError((e) => new Error(e.message))));
-    await ctx.runMutation(internal.connections.replaceNpmConnection, { organizationId, sealedCredential: sealed, keyVersion });
+    await ctx.runAction(components.accountKeys.npmConnection.save, { organizationId, token });
     return null;
-  },
-});
-
-export const replaceNpmConnection = internalMutation({
-  args: { organizationId: v.id("organizations"), sealedCredential: v.string(), keyVersion: v.number() },
-  returns: v.null(),
-  handler: async (ctx, { organizationId, sealedCredential, keyVersion }) => {
-    const existing = await ctx.db
-      .query("connections")
-      .withIndex("by_organization_and_connector", (q) => q.eq("organizationId", organizationId).eq("connector", "npm"))
-      .collect();
-    for (const connection of existing) await ctx.db.delete(connection._id);
-    await ctx.db.insert("connections", { organizationId, connector: "npm", sealedCredential, keyVersion, createdAt: Date.now() });
-    return null;
-  },
-});
-
-/** The organization's npm connection, still sealed; null when it has none. */
-export const sealedNpmConnection = internalQuery({
-  args: { organizationId: v.id("organizations") },
-  returns: v.union(v.null(), v.object({ sealedCredential: v.string(), keyVersion: v.number() })),
-  handler: async (ctx, { organizationId }) => {
-    const connection = await ctx.db
-      .query("connections")
-      .withIndex("by_organization_and_connector", (q) => q.eq("organizationId", organizationId).eq("connector", "npm"))
-      .unique();
-    return connection === null ? null : { sealedCredential: connection.sealedCredential, keyVersion: connection.keyVersion };
   },
 });

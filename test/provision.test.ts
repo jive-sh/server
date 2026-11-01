@@ -4,7 +4,7 @@ import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import { registerAccount } from "./support/accounts";
 import { createSoftwarePasskey } from "./support/softwareAuthenticator";
-import { LOCAL_ENV, SERVER_DIR, TEST_CONNECTION_KEY, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
+import { LOCAL_ENV, SERVER_DIR, TEST_CONNECTION_KEY, TIMEOUT, convex, generateGithubActionsJwks, run, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
 
 /**
  * A pipeline signing in (`pipelineSessions:signIn`) and `packages:provision` end to end, inside Convex's runtime:
@@ -90,7 +90,19 @@ async function signedIn(claims: Record<string, unknown>): Promise<string> {
   return body.value.sessionToken;
 }
 
-const provision = (sessionToken: string) => callAction("packages:provision", { sessionToken, registry: "npm", packageName: PACKAGE });
+const KIND = "connector-package-registry";
+
+/** `provision` by its bare path, the default export of convex/provision.ts, as the jive CLI calls it. */
+const provision = (sessionToken: string, input: { kind?: string; instance?: unknown } = {}) =>
+  callAction("provision", { sessionToken, kind: input.kind ?? KIND, instance: input.instance ?? { packageName: PACKAGE } });
+
+/** `packages:provision`, which jive-abstract-library 0.8.0 calls until it moves to the CLI. */
+const packagesProvision = (sessionToken: string) => callAction("packages:provision", { sessionToken, registry: "npm", packageName: PACKAGE });
+
+/** The registered repository's organization uses the npm connector for packages. */
+const configureNpm = (organizationName: string) => convex(["run", "seed:resourceImplementation", JSON.stringify({
+  organizationName, kind: KIND, implementation: "jive-resource-connector-package-registry-npm",
+})]);
 
 beforeAll(async () => {
   const trusted = await generateGithubActionsJwks();
@@ -153,6 +165,7 @@ beforeAll(async () => {
 
   const seeded = JSON.parse(await convex(["run", "seed:organizationWithRepository", JSON.stringify({ organizationName: "jive-test", repository: REPOSITORY })]));
   expect(seeded.organizationId).toBeString();
+  await configureNpm("jive-test");
 
   // Connected the way a person does: `bun run connect-npm`, its hidden answer piped in, checking the token
   // against the fake registry's /-/whoami.
@@ -215,16 +228,16 @@ describe("signing a pipeline in", () => {
   }, TIMEOUT);
 
   test("provisioning refuses a made-up token, a person's session, and a pipeline session once it is deleted", async () => {
-    const noSession = { body: { value: { status: "refused", reason: expect.stringContaining("opens no live pipeline session") } } };
-    expect(await provision("jive_not-a-token")).toMatchObject(noSession);
+    const noSession = () => ({ body: { value: { status: "refused", reason: "the session token opens no live session; sign the deploy job in with `jive login --cicd`" } } });
+    expect(await provision("jive_not-a-token")).toMatchObject(noSession());
 
     const person = await registerAccount(new ConvexHttpClient(convexUrl), await createSoftwarePasskey("jive.sh"));
-    expect(await provision(person.sessionToken)).toMatchObject(noSession);
+    expect(await provision(person.sessionToken)).toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("a person's session cannot provision") } } });
 
     const sessionToken = await signedIn({});
     const rows = JSON.parse(await convex(["run", "--inline-query", `return (await ctx.db.query("pipelineSessions").collect()).map((row) => row._id)`]));
     for (const id of rows) await convex(["run", "pipelineSessions:deleteSession", JSON.stringify({ id })]);
-    expect(await provision(sessionToken)).toMatchObject(noSession);
+    expect(await provision(sessionToken)).toMatchObject(noSession());
   }, TIMEOUT);
 
   test("a pipeline's session token opens no person's session", async () => {
@@ -236,33 +249,46 @@ describe("signing a pipeline in", () => {
 });
 
 describe("provisioning", () => {
-  test("a new package is refused with npm's second-factor page, publishing nothing, since nothing passes a person's answer back yet", async () => {
-    expect(await provision(await signedIn({}))).toMatchObject({ body: { status: "success", value: {
-      status: "refused",
-      reason: `npm asked for its second factor to publish ${PACKAGE}'s placeholder; a person answers it on ${SECOND_FACTOR_PAGE}, and Jive cannot pass that answer back to npm yet`,
-    } } });
+  test("a new package answers personNeeded with npm's second-factor page, publishing nothing, since nothing passes a person's answer back yet", async () => {
+    expect(await provision(await signedIn({}))).toEqual({ httpStatus: 200, body: expect.objectContaining({ status: "success", value: {
+      status: "personNeeded",
+      reason: `npm asks for its second factor to publish ${PACKAGE}'s placeholder; a person answers it on npm's page, and Jive cannot pass that answer back to npm yet`,
+      url: SECOND_FACTOR_PAGE,
+    } }) });
     expect(npm.publishes).toEqual([]);
     expect(npm.oneTimePasswords).toEqual([]);
   }, TIMEOUT);
 
-  test("a package the account maintains, whose publisher for pipeline.yml and the environment has published, is ready with no write to npm", async () => {
+  test("packages:provision answers the same as refused, naming npm's page", async () => {
+    expect(await packagesProvision(await signedIn({}))).toMatchObject({ body: { value: {
+      status: "refused",
+      reason: expect.stringContaining(`and Jive cannot pass that answer back to npm yet: ${SECOND_FACTOR_PAGE}`),
+    } } });
+  }, TIMEOUT);
+
+  test("a package the account maintains, whose publisher for pipeline.yml and the environment has published, is ready with no write to npm, with the same instanceId every time", async () => {
     npm.packages.set(PACKAGE, { maintainers: ["jive-test-account"], publishedBy: ["trust-1"] });
     npm.trust = [{
       id: "trust-1",
       type: "github",
       claims: { repository: "chaine-dance/jive-test-package", workflow_ref: { file: "pipeline.yml" }, environment: "latest" },
     }];
-    expect(await provision(await signedIn({}))).toMatchObject({ body: { status: "success", value: { status: "ready" } } });
-    expect(await provision(await signedIn({}))).toMatchObject({ body: { value: { status: "ready" } } });
+    const first = (await provision(await signedIn({}))).body.value;
+    expect(first.status).toBe("ready");
+    expect(first.instanceId).toBeString();
+    expect(first.instance).toEqual({ packageName: PACKAGE });
+    expect((await provision(await signedIn({}))).body.value).toEqual(first);
+    expect(await packagesProvision(await signedIn({}))).toMatchObject({ body: { value: { status: "ready" } } });
     expect(npm.publishes).toEqual([]);
     expect(npm.trustRequests).toBe(0);
     expect(npm.oneTimePasswords).toEqual([]);
   }, TIMEOUT);
 
   test("another deploy job's claim answers inProgress, and the package provisions once it is released", async () => {
-    await convex(["run", "packages:claim", JSON.stringify({ packageName: PACKAGE, holder: "another-job" })]);
-    expect(await provision(await signedIn({}))).toMatchObject({ body: { value: { status: "inProgress" } } });
-    await convex(["run", "packages:release", JSON.stringify({ packageName: PACKAGE, holder: "another-job" })]);
+    await convex(["run", "--component", "packageRegistryNpm", "resource:claim", JSON.stringify({ packageName: PACKAGE, holder: "another-job" })]);
+    expect((await provision(await signedIn({}))).body.value).toEqual({ status: "inProgress", retryAfterSeconds: 10 });
+    expect(await packagesProvision(await signedIn({}))).toMatchObject({ body: { value: { status: "inProgress" } } });
+    await convex(["run", "--component", "packageRegistryNpm", "resource:release", JSON.stringify({ packageName: PACKAGE, holder: "another-job" })]);
     expect(await provision(await signedIn({}))).toMatchObject({ body: { value: { status: "ready" } } });
   }, TIMEOUT);
 
@@ -271,8 +297,36 @@ describe("provisioning", () => {
       organizationName: "jive-test",
       repository: { repositoryId: "900003", repositoryOwnerId: REPOSITORY.repositoryOwnerId, owner: "chaine-dance", name: "impostor" },
     })]);
-    expect(await provision(await signedIn({ repository_id: "900003", repository: "chaine-dance/impostor" })))
-      .toMatchObject({ body: { value: { status: "refused", reason: expect.stringContaining("provisioned for another code repository") } } });
+    expect((await provision(await signedIn({ repository_id: "900003", repository: "chaine-dance/impostor" }))).body.value)
+      .toEqual({ status: "refused", reason: `${PACKAGE} is provisioned for another code repository` });
+  }, TIMEOUT);
+
+  test("an unknown kind, or an instance that isn't { packageName }, is refused", async () => {
+    const sessionToken = await signedIn({});
+    expect((await provision(sessionToken, { kind: "connector-chat" })).body.value)
+      .toEqual({ status: "refused", reason: "\"connector-chat\" is not a resource kind Jive knows; it knows connector-package-registry" });
+    expect((await provision(sessionToken, { instance: { name: PACKAGE } })).body.value)
+      .toMatchObject({ status: "refused", reason: expect.stringContaining("a connector-package-registry instance is { packageName }") });
+  }, TIMEOUT);
+
+  test("an organization with no implementation configured for the kind is refused, then one with no npm connection", async () => {
+    // A new organization each run: the local deployment keeps what earlier runs configured.
+    const stamp = Date.now();
+    const organizationName = `other-org-${stamp}`;
+    const other = { repositoryId: `${stamp}1`, repositoryOwnerId: `${stamp}2`, owner: organizationName, name: "app" };
+    await convex(["run", "seed:organizationWithRepository", JSON.stringify({ organizationName, repository: other })]);
+    const otherJob = { repository_id: other.repositoryId, repository_owner_id: other.repositoryOwnerId, repository: `${organizationName}/app` };
+    expect((await provision(await signedIn(otherJob))).body.value)
+      .toEqual({ status: "refused", reason: `the organization ${organizationName} has no implementation configured for connector-package-registry` });
+    await configureNpm(organizationName);
+    expect((await provision(await signedIn(otherJob))).body.value)
+      .toEqual({ status: "refused", reason: `the organization ${organizationName} has not connected an npm account to Jive` });
+  }, TIMEOUT);
+
+  test("an implementation that isn't installed, or a kind that doesn't exist, cannot be configured", async () => {
+    const configure = (kind: string, implementation: string) => run(["bunx", "convex", "run", "seed:resourceImplementation", JSON.stringify({ organizationName: "jive-test", kind, implementation })]);
+    expect((await configure(KIND, "jive-resource-connector-package-registry-jsr")).stderr).toContain("is not an installed implementation of connector-package-registry");
+    expect((await configure("connector-chat", "jive-resource-connector-chat-slack")).stderr).toContain("is not a resource kind this server knows");
   }, TIMEOUT);
 
   test("a connection request is spent by its first use", async () => {
@@ -286,9 +340,9 @@ describe("provisioning", () => {
     expect(await complete()).toMatchObject({ status: "error", errorMessage: expect.stringContaining("unknown, already used or expired") });
   }, TIMEOUT);
 
-  test("the npm token is stored sealed, never in the clear", async () => {
-    const stored = await convex(["run", "--inline-query", `return await ctx.db.query("connections").collect()`]);
-    expect(stored).toContain("sealedCredential");
+  test("the npm token is stored sealed in accountKeys, never in the clear", async () => {
+    const stored = await convex(["run", "--component", "accountKeys", "--inline-query", `return await ctx.db.query("npmConnections").collect()`]);
+    expect(stored).toContain("sealedToken");
     expect(stored).not.toContain(NPM_TOKEN);
   }, TIMEOUT);
 });

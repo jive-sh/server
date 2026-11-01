@@ -2,9 +2,9 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 /**
- * Jive's core resources (design doc §3): organizations own connections, code repositories and packages; people
- * sign in to accounts with passkeys and act through sessions. Only what `packages.provision` and signing in need
- * exists so far.
+ * Jive's core resources (design doc §3): organizations own code repositories and configure one implementation per
+ * resource kind; people sign in to accounts with passkeys and act through sessions. Each resource's instances (an
+ * npm package) are held in that resource's component, and the organization's npm connection in `accountKeys`.
  */
 export default defineSchema({
   /**
@@ -101,20 +101,6 @@ export default defineSchema({
   }).index("by_name", ["name"]),
 
   /**
-   * A connector initialised for an organization. `sealedCredential` is the connector's account (for npm, a
-   * token from a person's npm login) as JSON, AES-256-GCM sealed under `CONNECTION_KEY` version `keyVersion`
-   * (`<nonce>.<ciphertext>`, base64url), the way @jive-sh/app's Cloudflare backend did. `packages:provision`
-   * still reads this table. The connection `provision` reads is the accountKeys component's.
-   */
-  connections: defineTable({
-    organizationId: v.id("organizations"),
-    connector: v.literal("npm"),
-    sealedCredential: v.string(),
-    keyVersion: v.number(),
-    createdAt: v.number(),
-  }).index("by_organization_and_connector", ["organizationId", "connector"]),
-
-  /**
    * A person's single-use permission to store an organization's npm connection, issued by an internal action (so
    * only a deployment admin gets one) and redeemed by `connections:completeNpmConnection`, which lets the
    * credential travel in an HTTPS body instead of a command line. Only the SHA-256 of the id is stored.
@@ -140,27 +126,14 @@ export default defineSchema({
   }).index("by_github_ids", ["repositoryId", "repositoryOwnerId"]),
 
   /**
-   * A registry package, bound to the code repository whose pipeline first provisioned it. `trustedPublishers`
-   * records when Jive registered each environment's publisher, because npm does not say whether an unvalidated
-   * publisher is still waiting for its first publish or expired.
+   * The one implementation an organization configured for a resource kind (Alex, 2026-11-01: "it should probably
+   * only be provisioning the abstract. so `jive provision connector-package-registry` and then it talks to the jive org
+   * which should have one impl configured"). `kind` is the abstract's kind path (`connector-package-registry`),
+   * `implementation` the resource package (`jive-resource-connector-package-registry-npm`).
    */
-  packages: defineTable({
-    registry: v.literal("npm"),
-    name: v.string(),
-    codeRepositoryId: v.id("codeRepositories"),
-    trustedPublishers: v.array(v.object({ environment: v.string(), registeredAt: v.number() })),
-    lastProvisionedAt: v.number(),
-  }).index("by_registry_and_name", ["registry", "name"]),
-
-  /**
-   * At most one provisioning of a package at a time (§9): taken in a mutation, so Convex's serializable
-   * transactions let one caller win, before the action calls npm. An action that dies never releases its claim,
-   * so a claim past `expiresAt` may be taken over.
-   */
-  provisioningClaims: defineTable({
-    registry: v.literal("npm"),
-    packageName: v.string(),
-    holder: v.string(),
-    expiresAt: v.number(),
-  }).index("by_registry_and_package", ["registry", "packageName"]),
+  resourceImplementations: defineTable({
+    organizationId: v.id("organizations"),
+    kind: v.string(),
+    implementation: v.string(),
+  }).index("by_organization_and_kind", ["organizationId", "kind"]),
 });

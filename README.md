@@ -1,15 +1,15 @@
 # @jive-sh/server
 
-Jive's central server: a [Convex](https://www.convex.dev) backend holding Jive's core resources (organizations,
-code repositories, connections, packages) and acting on outside systems through connectors it installs. It
+Jive's central server: a [Convex](https://www.convex.dev) backend holding Jive's core resources (organizations and
+their code repositories) and acting on outside systems through the resources it installs. It
 extends [`jive-abstract-backend-convex`](https://github.com/jive-sh/jive-abstract-backend-convex), whose hooks
 push the functions and publish the generated client. Design: the Jive API v1 design doc
 (`packages/@jive-sh/jive/docs/jive_api_v1_design.md` in the chaine monorepo).
 
 So far it does three things: **people sign in** with their `jive.sh` passkey and act through sessions, which a
 browser or a program (a CLI, the Jive daemon) holds alike; it **signs with each account's SSH key**, which it holds so
-no client has to; and **`packages:provision`**, which a pipeline's deploy job calls, with the session it signed in
-for, right before it publishes a package to npm.
+no client has to; and **`provision`**, which a pipeline's deploy job calls, with the session it signed in for, to
+make sure a resource instance (an npm package) exists right before it uses it.
 
 ## Signing in, and sessions
 
@@ -76,20 +76,23 @@ with its session token; a revoked or expired session signs nothing.
 ## The organization's npm connection
 
 The same component holds one npm connection per organization (connector `npm`) and the P-256 signing passkey
-registered on that npm account. A person with the organization's npm access creates the connection once, through
-the browser sign-in `npmSessions:save` runs, naming the code repository the connection is for. `npmSessions` and
-`signingPasskey` check the Jive session and that repository, then call the component. `provision` (the default
-export of `convex/provision.ts`) reads the token and the passkey assertion from `accountKeys.npmConnection.token`
-and `accountKeys.npmConnection.sign`, and passes the token to the npm connector's `resource.ensureInstance`
-(see `@jive-sh/jive`'s `docs/jive_server_provision_api.md`). `packages:provision` still reads the app `connections`
-table until that call lands.
+registered on that npm account. The connection is created once, in one of two ways:
+- by a person with the organization's npm access, through the browser sign-in `npmSessions:save` runs, naming the
+  code repository the connection is for;
+- by a deployment admin running `bun run connect-npm` (Scaffolding, below).
+
+`npmSessions` and `signingPasskey` check the Jive session and that repository, then call the component.
+`provision` reads the token from `accountKeys.npmConnection.token` and passes it to the npm connector's
+`resource.ensureInstance`. It doesn't call `accountKeys.npmConnection.sign` yet: the connector's call takes no
+answer to npm's second factor, so a write npm guards answers `personNeeded` (below).
 
 ## How a pipeline calls it
 
-The deploy job of Jive's reusable pipeline has `id-token: write`. `jive-abstract-library` (0.8.0+, with
-`jive.library.provisionWithJive: { "serverUrl": … }`) asks GitHub for an ID token with audience
-`https://api.jive.sh`, signs the job in with it, then calls `packages:provision` with the session token, both over
-Convex's HTTP API:
+Alex (2026-11-01): "We have a deploy hook in CI. That should do a `jive login --cicd` then `jive provision` for a given
+resource". The deploy job of Jive's reusable pipeline has `id-token: write`. It asks GitHub for an ID token with
+audience `https://api.jive.sh`, signs the job in with it, then calls `provision` with the session token, both over
+Convex's HTTP API. The contract, which the `jive` CLI codes against, is `@jive-sh/jive`'s
+`docs/jive_server_provision_api.md`.
 
 ```http
 POST <deployment URL>/api/action
@@ -101,68 +104,97 @@ Authorization: Bearer <GitHub Actions ID token>
 ```http
 POST <deployment URL>/api/action
 
-{ "path": "packages:provision", "args": { "sessionToken": "jive_…", "registry": "npm", "packageName": "@scope/name" }, "format": "json" }
+{ "path": "provision", "args": { "sessionToken": "jive_…", "kind": "connector-package-registry", "instance": { "packageName": "@scope/name" } }, "format": "json" }
 ```
 
-Convex verifies the ID token itself (`convex/auth.config.ts`: a `customJwt` provider with GitHub's issuer, RS256,
-and `applicationID` `https://api.jive.sh`); the key set comes from `GITHUB_ACTIONS_JWKS`, GitHub's
+**Signing in.** Convex verifies the ID token itself (`convex/auth.config.ts`: a `customJwt` provider with GitHub's
+issuer, RS256, and `applicationID` `https://api.jive.sh`); the key set comes from `GITHUB_ACTIONS_JWKS`, GitHub's
 `/.well-known/jwks` in production. `signIn` answers `{ status: "signedIn", sessionToken, expiresAt }` or
-`{ status: "refused", reason }`. It checks the job (`convex/model/pipelineCaller.ts`): the token must come from
-`.github/workflows/pipeline.yml`, from a push or a manual run, on a protected branch or tag, on a GitHub-hosted
-runner, in a job that names a GitHub Actions environment, of a code repository registered with Jive, found by
-GitHub's immutable `repository_id` and `repository_owner_id`. The session keeps the repository, the environment and
-the workflow file, which provisioning acts on. `packages:provision` answers one of:
+`{ status: "refused", reason }`. It checks the job (`convex/model/pipelineCaller.ts`). The token must come from:
+- `.github/workflows/pipeline.yml`;
+- a push or a manual run;
+- a protected branch or tag;
+- a GitHub-hosted runner;
+- a job that names a GitHub Actions environment;
+- a code repository registered with Jive, found by GitHub's immutable `repository_id` and `repository_owner_id`.
+
+The session keeps the repository, the environment and the workflow file, which provisioning acts on.
+
+**`provision`** is the default export of `convex/provision.ts`. So its path is `provision`, and from the typed client
+it is `api.provision.default`. It takes `{ sessionToken, kind, instance }` and answers:
 
 | Answer | Meaning |
 | --- | --- |
-| `{ status: "ready" }` | Publish now, by trusted publishing. |
-| `{ status: "inProgress" }` | Another deploy job is provisioning this package; ask again shortly. |
-| `{ status: "refused", reason }` | Don't publish; `reason` says what to change. A token that opens no live pipeline session is refused. |
+| `{ status: "ready", instanceId, instance }` | The instance exists; publish now, by trusted publishing. |
+| `{ status: "inProgress", retryAfterSeconds }` | Another deploy job is provisioning it; ask again after `retryAfterSeconds`. |
+| `{ status: "personNeeded", reason, url }` | npm wants a person's second factor on its page `url`; nothing passes the answer back yet. |
+| `{ status: "refused", reason }` | Don't publish; `reason` says what to change. |
 
 Any other failure is a function error, and the deploy fails without publishing.
 
-## What `packages:provision` does
+`packages:provision({ sessionToken, registry: "npm", packageName })` is what jive-abstract-library 0.8.0's deploy
+calls. It is `provision` for kind `connector-package-registry`, in its older shape: `ready`, `inProgress`, or
+`refused`, with `personNeeded` turned into `refused` naming the page. It goes away once callers move to the CLI.
 
-1. **For which repository:** the pipeline session's. A package already bound to another repository is refused.
-2. **One at a time:** a mutation claims the package (`provisioningClaims`), so of two deploy jobs only one acts;
-   the other gets `inProgress`. A claim lasts 5 minutes, so one left by a dead action is taken over.
-3. **Through the organization's npm connection** (`jive-resource-connector-package-registry-npm`): create the `0.0.0`
-   placeholder if the package doesn't exist (refusing a package another npm account maintains); then make sure a
-   trusted publisher for the repository, `pipeline.yml` and the job's environment can publish. A validated one,
-   or one Jive registered less than 47 hours ago, is kept; an unvalidated one that is older or unknown to Jive may
-   have expired (npm expires a publisher unused for 2 days and doesn't say so), so it is removed and registered
-   again (`convex/model/publisherPlan.ts`).
-4. Record the package, its repository and when each environment's publisher was registered; release the claim.
+## What `provision` does
+
+1. **Who asks** (`convex/provision.ts`): only a live pipeline session may provision. A person's session, or a token
+   that opens none, is refused.
+2. **Which implementation:** the caller names the kind, never the implementation (Alex, 2026-11-01: "it should
+   probably only be provisioning the abstract. so `jive provision connector-package-registry` and then it talks to
+   the jive org which should have one impl configured"). The session's organization configures one implementation
+   per kind (`resourceImplementations`). `convex/model/resourceKinds.ts` lists the kinds and the implementations this
+   server installed: `connector-package-registry`, with `jive-resource-connector-package-registry-npm`. These are
+   refused, each with the organization and the kind named:
+   - an unknown kind;
+   - an organization with no implementation configured for the kind;
+   - a configured implementation this server didn't install.
+3. **The implementation's standard call** (`convex/model/packageRegistryNpm.ts` for npm): it checks the instance is
+   `{ packageName }`, reads the organization's npm token from `accountKeys` (refusing an organization with none),
+   and calls `packageRegistryNpm`'s `resource.ensureInstance`. That call does the work, in the connector:
+   - binds the package to the code repository that first provisioned it;
+   - claims it, so two deploy jobs don't act at once;
+   - creates the `0.0.0` placeholder if it's missing;
+   - keeps or replaces the trusted publisher for the repository, `pipeline.yml` and the environment;
+   - records the package in its own tables.
+
+   Its README has the details.
 
 npm asks for the account's second factor before publishing the placeholder or changing trusted publishers. The
-connector never answers it: it hands back npm's own page, where a person answers. Nothing passes that answer back to
-npm yet, so a provisioning that needs a write answers `refused`, its reason naming the page; one that needs none (the
-package exists and its publisher has published) answers `ready`. The connection holds only the npm token
-(`bun run connect-npm`); a connection stored before 0.2.0 also holds an authenticator secret, which nothing reads.
+connector never answers it: it hands back npm's own page, where a person answers, so `provision` answers
+`personNeeded`. A provisioning that needs no write (the package exists and its publisher for the job has published)
+answers `ready`.
 
 ## Records
 
 `convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `sshKeys`, `pipelineSessions`,
-`signInRequests`, `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`. `sshKeys`
-is the pre-component copy, dropped once `ssh:migrateToAccountKeys` has run on production and the counts match.
-From then on, SSH keys, npm connections and signing passkeys are the `accountKeys` component's tables. Challenges,
-sign-in requests and pipeline sessions are deleted by a scheduled function when they expire.
+`signInRequests`, `organizations`, `connectionRequests`, `codeRepositories`, `resourceImplementations`. `sshKeys` is
+the pre-component copy, dropped once `ssh:migrateToAccountKeys` has run on production and the counts match. Other
+components hold the rest:
+- `accountKeys` holds SSH keys, npm connections and signing passkeys.
+- The npm connector holds each provisioned package and its claims.
 
-A connection's credential (for npm: the token) is stored sealed, never in the
-clear: AES-256-GCM under `CONNECTION_KEY`, as `<nonce>.<ciphertext>` beside the key's version, the way
-`@jive-sh/app`'s Cloudflare backend did (`convex/model/sealing.ts`). `CONNECTION_KEY` is `<version>:<base64 32 bytes>`,
-generated once per deployment by the backend abstract. Only internal functions read a connection, and only the
-provisioning action opens one.
+Challenges, sign-in requests and pipeline sessions are deleted by a scheduled function when they expire.
+
+A credential (for npm: the token) is stored sealed, never in the clear: AES-256-GCM under `CONNECTION_KEY`, as
+`<nonce>.<ciphertext>` beside the key's version (`convex/model/sealing.ts`). `CONNECTION_KEY` is
+`<version>:<base64 32 bytes>`, generated once per deployment by the backend abstract.
 
 ## Scaffolding
 
-Until `organizations.create`, `codeRepositories.provision` and `connections.create` exist, a person registers
-them by hand.
+Until `organizations.create`, `codeRepositories.provision` and a CLI call that creates a connection exist, a
+deployment admin registers them by hand.
 
 The organization and its repository, by GitHub's ids (none of it secret):
 
 ```sh
 bunx convex run seed:organizationWithRepository '{"organizationName":"…","repository":{"repositoryId":"…","repositoryOwnerId":"…","owner":"…","name":"…"}}' --deployment <deployment>
+```
+
+The implementation the organization uses for a resource kind (one per kind):
+
+```sh
+bunx convex run seed:resourceImplementation '{"organizationName":"…","kind":"connector-package-registry","implementation":"jive-resource-connector-package-registry-npm"}' --deployment <deployment>
 ```
 
 The npm connection, so that the token is never on a command line or in shell history:
@@ -174,8 +206,8 @@ bun run connect-npm -- --deployment <deployment> --organization <organization>
 It prompts for the npm access token without echoing it, and checks the token with npm's read-only `/-/whoami`; it
 never sends a one-time password to npm. It then has `convex run connections:openNpmConnectionRequest`
 issue a single-use request id, valid for 5 minutes and stored only as its SHA-256, and sends the credential with
-that id to the public action `connections:completeNpmConnection` in an HTTPS body. That action stores the credential
-sealed, replacing any npm connection the organization had, and spends the id.
+that id to the public action `connections:completeNpmConnection` in an HTTPS body. That action stores the token in
+`accountKeys`, sealed, replacing any npm connection the organization had, and spends the id.
 
 Alex's account was made by `seed:accountWithPasskey` (once, on production, 2026-11-01) from the passkey
 skill-sync-service holds in its `credentials` table, copied, not moved, so skill-sync keeps it too.
@@ -184,8 +216,7 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
 
 `bun run jive:cicd:audit` typechecks and runs:
 
-- `test/model.test.ts`: the pipeline sign-in checks, the publisher decisions, sealing, and the provisioning flow
-  against in-memory records and connector.
+- `test/model.test.ts`: the pipeline sign-in checks and sealing.
 - `test/sessions.test.ts`: only `insertAccountSession` and `insertPipelineSession` insert sessions, and each is called
   only after its check.
 - `test/connect-npm.test.ts`: the hidden prompt's line handling.
@@ -197,16 +228,26 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
   sealed; a git commit signature assembled from `ssh:sign` the way `ssh-keygen -Y sign` assembles one over an
   agent passes the real `ssh-keygen -Y verify` (and fails for another commit); an SSH authentication blob's
   signature verifies against the public key; a made-up or revoked session, and an account with no key, are refused.
-- `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account); the npm
-  connection made by running `connect-npm` with the token piped in; `pipelineSessions:signIn` called over HTTP with
-  RS256 tokens shaped like GitHub's and signed by a key the test generates: no token, a wrong audience or key, an
-  unregistered repository, a pull request and a job outside an environment refused; a deploy job's session token
-  lasting an hour, stored only as its hash, its deletion scheduled at expiry. Then `packages:provision` with that
-  session, against a fake npm registry that guards every write with npm's web second-factor challenge: a made-up
-  token, a person's session and a deleted pipeline session refused; a pipeline's token refused by a person's call;
-  a new package refused with npm's page, a provisioned package ready with no write, a repeated call changing
-  nothing, a held claim, another repository refused, a connection request used twice, and that the stored
-  credential is sealed.
+- `test/provision.test.ts`, on an anonymous local Convex backend (no Convex account):
+  - **Setup:** the npm connection is made by running `connect-npm` with the token piped in.
+  - **`pipelineSessions:signIn`**, called over HTTP with RS256 tokens shaped like GitHub's and signed by a key the
+    test generates:
+    - refused: no token, a wrong audience or key, an unregistered repository, a pull request, and a job outside an
+      environment;
+    - a deploy job's session token lasts an hour, is stored only as its hash, and has its deletion scheduled at
+      expiry.
+  - **`provision`, by its bare path**, against a fake npm registry that guards every write with npm's web
+    second-factor challenge:
+    - refused: a made-up token, a person's session, a deleted pipeline session, an unknown kind, an instance that
+      isn't `{ packageName }`, an organization with no implementation configured, one with no npm connection, and
+      another repository asking for the same package;
+    - a pipeline's token is refused by a person's call;
+    - a new package answers `personNeeded` with npm's page and publishes nothing;
+    - a provisioned package is `ready` with no write, with the same `instanceId` on every call;
+    - a held claim answers `inProgress`;
+    - `packages:provision` gives the same answers in its older shape.
+  - **Also:** an uninstalled implementation can't be configured, a connection request works once, and the stored
+    token is sealed in `accountKeys`.
 
 ## Not built yet
 
