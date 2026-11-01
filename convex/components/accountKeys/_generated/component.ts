@@ -75,6 +75,19 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         { publicKey: string },
         Name
       >;
+      importExisting: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          accountId: string;
+          createdAt: number;
+          keyVersion: number;
+          publicKey: string;
+          sealedPrivateKey: string;
+        },
+        "copied" | "alreadyPresent",
+        Name
+      >;
       publicKey: FunctionReference<
         "query",
         "internal",

@@ -55,7 +55,11 @@ is claimed once. All of it is plain Convex, so a program calls it with `ConvexHt
 Alex (2026-11-01): "The ssh key will be saved on the account, and a ssh signing request paired with a session token
 would have jive internally load the ssh key and sign the request". Each account has at most one ed25519 key,
 generated in the `accountKeys` component; its private key never leaves the server, sealed under `CONNECTION_KEY`.
-`convex/ssh.ts` checks the session and calls the component. The calls below are unchanged.
+`convex/ssh.ts` checks the session and calls the component. Keys written before the component stay in the app
+table `sshKeys`. The deploy runs `ssh:migrateToAccountKeys` after the push and copies each row, still sealed,
+under the same account and the same public key. `ssh:createKey` and `ssh:sign` copy that account's row first, so
+a key that is already there is the one returned and a second one is not minted. The app table stays until a later
+commit, after that copy has run on production and the counts match. The calls below are unchanged.
 
 | Call | Kind | What it does |
 | --- | --- | --- |
@@ -138,9 +142,10 @@ package exists and its publisher has published) answers `ready`. The connection 
 
 ## Records
 
-`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `pipelineSessions`,
-`signInRequests`, `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`. SSH keys,
-npm connections and signing passkeys are the `accountKeys` component's tables. Challenges,
+`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `sshKeys`, `pipelineSessions`,
+`signInRequests`, `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`. `sshKeys`
+is the pre-component copy, dropped once `ssh:migrateToAccountKeys` has run on production and the counts match.
+From then on, SSH keys, npm connections and signing passkeys are the `accountKeys` component's tables. Challenges,
 sign-in requests and pipeline sessions are deleted by a scheduled function when they expire.
 
 A connection's credential (for npm: the token) is stored sealed, never in the

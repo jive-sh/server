@@ -431,6 +431,41 @@ export declare const internal: {
       { sessionToken: string },
       null | { accountId: Id<"accounts">; username: string }
     >;
+    insertLegacy: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        accountId: Id<"accounts">;
+        createdAt: number;
+        keyVersion: number;
+        publicKey: string;
+        sealedPrivateKey: string;
+      },
+      null
+    >;
+    legacyKey: FunctionReference<
+      "query",
+      "internal",
+      { accountId: Id<"accounts"> },
+      null | {
+        createdAt: number;
+        keyVersion: number;
+        publicKey: string;
+        sealedPrivateKey: string;
+      }
+    >;
+    migrateToAccountKeys: FunctionReference<
+      "mutation",
+      "internal",
+      { environment: string; sourceCommitSha: string },
+      { alreadyPresent: number; copied: number }
+    >;
+    removeLegacy: FunctionReference<
+      "mutation",
+      "internal",
+      { accountId: Id<"accounts"> },
+      null
+    >;
     sealedKey: FunctionReference<
       "query",
       "internal",

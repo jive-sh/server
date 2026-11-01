@@ -66,6 +66,18 @@ export const api: {
       { accountId: string; username: string },
       { publicKey: string }
     >;
+    importExisting: FunctionReference<
+      "mutation",
+      "public",
+      {
+        accountId: string;
+        createdAt: number;
+        keyVersion: number;
+        publicKey: string;
+        sealedPrivateKey: string;
+      },
+      "copied" | "alreadyPresent"
+    >;
     publicKey: FunctionReference<
       "query",
       "public",

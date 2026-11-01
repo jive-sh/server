@@ -72,7 +72,7 @@
           "customDomains": []
         }
       },
-      "afterDeploy": null,
+      "afterDeploy": { "function": "ssh:migrateToAccountKeys" },
       "provisionWithJive": null
     }
   }

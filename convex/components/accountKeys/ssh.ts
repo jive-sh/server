@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { Effect, pipe } from "effect";
 import { internal } from "./_generated/api";
-import { action, internalMutation, internalQuery, query } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { openWithDeploymentKey, sealWithDeploymentKey } from "../../model/sealing";
 import { generateSshKey, signWithSshKey } from "./sshKeys";
 
@@ -80,6 +80,32 @@ export const publicKeyForAccount = internalQuery({
   handler: async (ctx, { accountId }) => {
     const key = await ctx.db.query("sshKeys").withIndex("by_account", (q) => q.eq("accountId", accountId)).unique();
     return key === null ? null : key.publicKey;
+  },
+});
+
+const DIFFERENT_KEY = "This account already has a different SSH key in accountKeys.";
+
+/**
+ * Copies a key that already exists, still sealed. The same public key is left as it is. A different public key
+ * already stored for the account is a failure, so a second key is never written over the first.
+ */
+export const importExisting = mutation({
+  args: {
+    accountId: v.string(),
+    publicKey: v.string(),
+    sealedPrivateKey: v.string(),
+    keyVersion: v.number(),
+    createdAt: v.number(),
+  },
+  returns: v.union(v.literal("copied"), v.literal("alreadyPresent")),
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.query("sshKeys").withIndex("by_account", (q) => q.eq("accountId", args.accountId)).unique();
+    if (existing !== null) {
+      if (existing.publicKey !== args.publicKey) throw new ConvexError(DIFFERENT_KEY);
+      return "alreadyPresent";
+    }
+    await ctx.db.insert("sshKeys", args);
+    return "copied";
   },
 });
 
