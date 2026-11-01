@@ -9,7 +9,7 @@
         "convex": "^1.48.0",
         "effect": "^4.0.0",
         "friendly-words": "^1.3.1",
-        "jive-resource-connector-package-registry-npm": "^0.2.0",
+        "jive-resource-connector-package-registry-npm": "^0.3.0",
       },
       "devDependencies": {
         "@types/bun": "^1.3.14",
@@ -372,7 +372,7 @@
 
     "jive-abstract-library-windows-x64": ["jive-abstract-library@0.3.0-latest-windows-x64", "", { "os": "win32", "cpu": "x64" }, "sha512-3ZGbvSWCUocnegoJ9Z4900HrdNznoDVQcFYDFGlHjCuoaxATW0fESu8FCcUxO+cD3v7TGJ+ajH2PWMdP+YDmRw=="],
 
-    "jive-resource-connector-package-registry-npm": ["jive-resource-connector-package-registry-npm@0.2.0", "", { "dependencies": { "effect": "^4.0.0", "fflate": "^0.8.3" }, "peerDependencies": { "convex": "^1.48.0" } }, "sha512-bnSxAJRSjxotzWTf73O29SfcK9cuzS9I4C+H+RCY7K8V5GPFdCzIAi5Anm6HcBGLmi2Fmu/dkdutKtsBJVoMtQ=="],
+    "jive-resource-connector-package-registry-npm": ["jive-resource-connector-package-registry-npm@0.3.0", "", { "dependencies": { "effect": "^4.0.0", "fflate": "^0.8.3" }, "peerDependencies": { "convex": "^1.48.0" } }, "sha512-/jwL3C15ytLE0dNDo9hkd5meFif1KOGwhSEoIH1+qq0WzUo2L8AWdkOuuqGD85d0IxUgPzSsRTlTuObhVRWTwA=="],
 
     "js-string-escape": ["js-string-escape@1.0.1", "", {}, "sha512-Smw4xcfIQ5LVjAOuJCvN/zIodzA/BBSsluuoSykP+lUvScIi4U6RJLfwHet5cxFnCswUjISV8oAXaqaJDY3chg=="],
 

@@ -28,6 +28,8 @@ function base64Url(bytes: Uint8Array | string): string {
 
 /** The page npm names when it wants a person to answer its second factor, as the fake registry names it. */
 const SECOND_FACTOR_PAGE = "https://www.npmjs.com/auth/cli/approve-1";
+/** The one-time password the fake doneUrl gives once a person has finished the page (`npm.answered`). */
+const ANSWERED_PASSWORD = "731944";
 
 const npm = {
   packages: new Map<string, { maintainers: Array<string>; publishedBy: Array<string> }>(),
@@ -35,6 +37,9 @@ const npm = {
   trust: [] as Array<{ id: string; type: string; claims: any }>,
   trustRequests: 0,
   oneTimePasswords: [] as Array<string>,
+  /** Whether a person has finished npm's page, so its doneUrl gives the one-time password. */
+  answered: false,
+  doneRequests: 0,
 };
 
 let signingKey: CryptoKey;
@@ -119,15 +124,20 @@ beforeAll(async () => {
       if (otp !== null) npm.oneTimePasswords.push(otp);
       // npm's answer to a write sent with `npm-auth-type: web` and no one-time password: its page for a person.
       const challenge = () => Response.json(
-        { authUrl: SECOND_FACTOR_PAGE, doneUrl: "https://registry.npmjs.org/-/v1/done?authId=1" },
+        { authUrl: SECOND_FACTOR_PAGE, doneUrl: `${url.origin}/-/v1/done?authId=1` },
         { status: 401, headers: { "www-authenticate": "OTP" } },
       );
+      // npm's doneUrl: 202 while the person hasn't finished the page, then the one-time password.
+      if (url.pathname === "/-/v1/done") {
+        npm.doneRequests += 1;
+        return npm.answered ? Response.json({ token: ANSWERED_PASSWORD }) : new Response(null, { status: 202 });
+      }
       if (url.pathname === "/-/whoami") return authorized ? Response.json({ username: "jive-test-account" }) : new Response("no", { status: 401 });
       const trust = url.pathname.match(/^\/-\/package\/([^/]+)\/trust(?:\/([^/]+))?$/);
       if (trust !== null) {
         if (!authorized) return new Response("no", { status: 401 });
         if (request.method === "GET") return Response.json(npm.trust);
-        if (otp === null) return challenge();
+        if (otp !== ANSWERED_PASSWORD) return challenge();
         if (request.method === "DELETE") {
           npm.trust = npm.trust.filter((config) => config.id !== decodeURIComponent(trust[2]!));
           return new Response(null, { status: 204 });
@@ -149,7 +159,7 @@ beforeAll(async () => {
       }
       if (request.method === "PUT") {
         if (!authorized) return new Response("no", { status: 401 });
-        if (otp === null) return challenge();
+        if (otp !== ANSWERED_PASSWORD) return challenge();
         npm.publishes.push(name);
         npm.packages.set(name, { maintainers: ["jive-test-account"], publishedBy: [] });
         return Response.json({ ok: true });
@@ -249,21 +259,23 @@ describe("signing a pipeline in", () => {
 });
 
 describe("provisioning", () => {
-  test("a new package answers personNeeded with npm's second-factor page, publishing nothing, since nothing passes a person's answer back yet", async () => {
+  test("a new package no one has answered npm's page for answers personNeeded with only the page, after polling npm's doneUrl, publishing nothing", async () => {
+    const doneRequests = npm.doneRequests;
     expect(await provision(await signedIn({}))).toEqual({ httpStatus: 200, body: expect.objectContaining({ status: "success", value: {
       status: "personNeeded",
-      reason: `npm asks for its second factor to publish ${PACKAGE}'s placeholder; a person answers it on npm's page, and Jive cannot pass that answer back to npm yet`,
+      reason: `npm asks for its second factor to publish ${PACKAGE}'s placeholder`,
       url: SECOND_FACTOR_PAGE,
     } }) });
+    expect(npm.doneRequests).toBeGreaterThan(doneRequests);
     expect(npm.publishes).toEqual([]);
     expect(npm.oneTimePasswords).toEqual([]);
   }, TIMEOUT);
 
   test("packages:provision answers the same as refused, naming npm's page", async () => {
-    expect(await packagesProvision(await signedIn({}))).toMatchObject({ body: { value: {
+    expect((await packagesProvision(await signedIn({}))).body.value).toEqual({
       status: "refused",
-      reason: expect.stringContaining(`and Jive cannot pass that answer back to npm yet: ${SECOND_FACTOR_PAGE}`),
-    } } });
+      reason: `npm asks for its second factor to publish ${PACKAGE}'s placeholder: ${SECOND_FACTOR_PAGE}`,
+    });
   }, TIMEOUT);
 
   test("a package the account maintains, whose publisher for pipeline.yml and the environment has published, is ready with no write to npm, with the same instanceId every time", async () => {
@@ -327,6 +339,21 @@ describe("provisioning", () => {
     const configure = (kind: string, implementation: string) => run(["bunx", "convex", "run", "seed:resourceImplementation", JSON.stringify({ organizationName: "jive-test", kind, implementation })]);
     expect((await configure(KIND, "jive-resource-connector-package-registry-jsr")).stderr).toContain("is not an installed implementation of connector-package-registry");
     expect((await configure("connector-chat", "jive-resource-connector-chat-slack")).stderr).toContain("is not a resource kind this server knows");
+  }, TIMEOUT);
+
+  test("once a person has finished npm's page, the one-time password from its doneUrl completes the provisioning, and the connection is marked registered", async () => {
+    const packageName = "@chaine.dance/jive-answered";
+    npm.answered = true;
+    try {
+      expect((await provision(await signedIn({}), { instance: { packageName } })).body.value)
+        .toMatchObject({ status: "ready", instance: { packageName } });
+    } finally {
+      npm.answered = false;
+    }
+    expect(npm.publishes).toContain(packageName);
+    expect(npm.oneTimePasswords).toContain(ANSWERED_PASSWORD);
+    const registered = await convex(["run", "--component", "accountKeys", "--inline-query", `return (await ctx.db.query("npmConnections").collect()).map((connection) => connection.passkeyRegistered)`]);
+    expect(JSON.parse(registered)).toContain(true);
   }, TIMEOUT);
 
   test("a connection request is spent by its first use", async () => {
