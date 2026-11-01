@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { LOCAL_ENV, SERVER_DIR, TIMEOUT, convex, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
+import { LOCAL_ENV, SERVER_DIR, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
 
 /**
  * `packages:provision` end to end, inside Convex's runtime: this package pushed to an anonymous local Convex
@@ -76,16 +76,9 @@ async function provision(token: string | undefined): Promise<any> {
 }
 
 beforeAll(async () => {
-  const generate = () => crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-    true,
-    ["sign", "verify"],
-  );
-  const pair = await generate();
-  signingKey = pair.privateKey;
-  otherSigningKey = (await generate()).privateKey;
-  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
-  const jwks = JSON.stringify({ keys: [{ ...publicJwk, kid: "test-key", alg: "RS256", use: "sig" }] });
+  const trusted = await generateGithubActionsJwks();
+  signingKey = trusted.signingKey;
+  otherSigningKey = (await generateGithubActionsJwks()).signingKey;
 
   registry = Bun.serve({
     hostname: "127.0.0.1",
@@ -136,10 +129,7 @@ beforeAll(async () => {
     },
   });
 
-  await initLocalDeployment();
-  await convex(["env", "set", "GITHUB_ACTIONS_JWKS", `data:text/plain;charset=utf-8;base64,${Buffer.from(jwks).toString("base64")}`]);
-  await convex(["env", "set", "CONNECTION_KEY", CONNECTION_KEY]);
-  await convex(["env", "set", "NPM_REGISTRY_URL", `http://127.0.0.1:${registry.port}`]);
+  await initLocalDeployment({ GITHUB_ACTIONS_JWKS: trusted.jwks, CONNECTION_KEY, NPM_REGISTRY_URL: `http://127.0.0.1:${registry.port}` });
 
   devServer = await startDevServer();
   convexUrl = devServer.url;

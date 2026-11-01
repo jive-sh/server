@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
-import { TIMEOUT, convex, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
+import { TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
 import { createSoftwarePasskey, type SoftwarePasskey } from "./support/softwareAuthenticator";
 
 /**
@@ -16,8 +16,7 @@ let devServer: DevServer | undefined;
 let client: ConvexHttpClient;
 
 beforeAll(async () => {
-  await initLocalDeployment();
-  await convex(["env", "set", "WEBSITE_DOMAIN", "jive.sh"]);
+  await initLocalDeployment({ GITHUB_ACTIONS_JWKS: (await generateGithubActionsJwks()).jwks, WEBSITE_DOMAIN: "jive.sh" });
   devServer = await startDevServer();
   client = new ConvexHttpClient(devServer.url);
 }, TIMEOUT);

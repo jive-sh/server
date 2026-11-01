@@ -73,7 +73,7 @@ export default defineSchema({
   /**
    * A connector initialised for an organization. `sealedCredential` is the connector's account (for npm, a
    * token from a person's npm login) as JSON, AES-256-GCM sealed under `CONNECTION_KEY` version `keyVersion`
-   * (`<nonce>.<ciphertext>`, base64url), the way @jive-sh/app seals connections.
+   * (`<nonce>.<ciphertext>`, base64url), the way @jive-sh/app's Cloudflare backend did.
    */
   connections: defineTable({
     organizationId: v.id("organizations"),

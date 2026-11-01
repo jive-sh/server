@@ -93,7 +93,7 @@ by a scheduled function when they expire.
 
 A connection's credential (for npm: the token) is stored sealed, never in the
 clear: AES-256-GCM under `CONNECTION_KEY`, as `<nonce>.<ciphertext>` beside the key's version, the way
-`@jive-sh/app` seals connections (`convex/model/sealing.ts`). `CONNECTION_KEY` is `<version>:<base64 32 bytes>`,
+`@jive-sh/app`'s Cloudflare backend did (`convex/model/sealing.ts`). `CONNECTION_KEY` is `<version>:<base64 32 bytes>`,
 generated once per deployment by the backend abstract. Only internal functions read a connection, and only the
 provisioning action opens one.
 

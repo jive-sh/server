@@ -47,10 +47,27 @@ export function localDeploymentUrl(): string {
   return url;
 }
 
-/** Creates (or reuses) the anonymous deployment; call before setting its environment variables. */
-export async function initLocalDeployment(): Promise<void> {
+/**
+ * Creates (or reuses) the anonymous deployment and sets the given environment variables on it. Every test file
+ * passes `GITHUB_ACTIONS_JWKS`, because `auth.config.ts` reads it and Convex refuses to push while it is unset, and
+ * a file may run first on a fresh deployment.
+ */
+export async function initLocalDeployment(environmentVariables: Readonly<Record<string, string>> & { readonly GITHUB_ACTIONS_JWKS: string }): Promise<void> {
   await convex(["init"]);
   localDeploymentUrl();
+  for (const [name, value] of Object.entries(environmentVariables)) await convex(["env", "set", name, value]);
+}
+
+/** A data URI JWKS of one fresh RS256 key, for `GITHUB_ACTIONS_JWKS`; returns the private key to sign tokens with. */
+export async function generateGithubActionsJwks(): Promise<{ readonly jwks: string; readonly signingKey: CryptoKey }> {
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  const jwks = JSON.stringify({ keys: [{ ...publicJwk, kid: "test-key", alg: "RS256", use: "sig" }] });
+  return { jwks: `data:text/plain;charset=utf-8;base64,${Buffer.from(jwks).toString("base64")}`, signingKey: pair.privateKey };
 }
 
 export interface DevServer {
@@ -79,13 +96,17 @@ export async function startDevServer(): Promise<DevServer> {
     }
     throw new Error(`convex dev stopped before the functions were ready:\n${printed}`);
   })();
-  await Promise.race([ready, Bun.sleep(TIMEOUT - 30_000).then(() => { throw new Error(`convex dev did not get ready:\n${printed}`); })]);
-  return {
-    url: localDeploymentUrl(),
-    stop: async () => {
-      devServer.kill("SIGINT");
-      await Promise.race([devServer.exited, Bun.sleep(20_000)]);
-      if (devServer.exitCode === null) devServer.kill("SIGKILL");
-    },
+  const stop = async () => {
+    devServer.kill("SIGINT");
+    await Promise.race([devServer.exited, Bun.sleep(20_000)]);
+    if (devServer.exitCode === null) devServer.kill("SIGKILL");
   };
+  try {
+    await Promise.race([ready, Bun.sleep(TIMEOUT - 30_000).then(() => { throw new Error(`convex dev did not get ready:\n${printed}`); })]);
+  } catch (cause) {
+    // A backend left running would hold its port and fail every later test file too.
+    await stop();
+    throw cause;
+  }
+  return { url: localDeploymentUrl(), stop };
 }

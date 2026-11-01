@@ -2,8 +2,7 @@ import { Data, Effect } from "effect";
 import { fromBase64Url, toBase64Url } from "./tokens";
 
 /**
- * Credentials at rest, sealed the way @jive-sh/app seals connection payloads (its `src/modules/crypto/impl.ts`,
- * `docs/db-model.md`): AES-256-GCM with a fresh 12-byte nonce per message, stored as `<nonce>.<ciphertext>`
+ * Credentials at rest, sealed the way @jive-sh/app's Cloudflare backend sealed connection payloads: AES-256-GCM with a fresh 12-byte nonce per message, stored as `<nonce>.<ciphertext>`
  * base64url beside the version of the key that sealed it, so the key can rotate. Web Crypto only, which Convex's
  * default runtime has.
  */
