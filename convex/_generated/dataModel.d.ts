@@ -27,6 +27,24 @@ import type { GenericId } from "convex/values";
  */
 
 export type DataModel = {
+  accounts: {
+    document: {
+      createdAt: number;
+      username: string;
+      webAuthnUserId: string;
+      _id: Id<"accounts">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      "_creationTime" | "_id" | "createdAt" | "username" | "webAuthnUserId";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_username: ["username", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   codeRepositories: {
     document: {
       name: string;
@@ -144,6 +162,31 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
+  passkeys: {
+    document: {
+      accountId: Id<"accounts">;
+      createdAt: number;
+      credentialId: string;
+      publicKey: string;
+      _id: Id<"passkeys">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "accountId"
+      | "createdAt"
+      | "credentialId"
+      | "publicKey";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_account: ["accountId", "_creationTime"];
+      by_credential_id: ["credentialId", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
   provisioningClaims: {
     document: {
       expiresAt: number;
@@ -164,6 +207,86 @@ export type DataModel = {
       by_id: ["_id"];
       by_creation_time: ["_creationTime"];
       by_registry_and_package: ["registry", "packageName", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  sessions: {
+    document: {
+      accountId: Id<"accounts">;
+      createdAt: number;
+      expiresAt: number;
+      origin: "browser" | "signInRequest";
+      revokedAt?: number;
+      tokenHash: string;
+      _id: Id<"sessions">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "accountId"
+      | "createdAt"
+      | "expiresAt"
+      | "origin"
+      | "revokedAt"
+      | "tokenHash";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_account: ["accountId", "_creationTime"];
+      by_token_hash: ["tokenHash", "_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  signInRequests: {
+    document: {
+      approvedAccountId?: Id<"accounts">;
+      claimSecretHash: string;
+      claimedAt?: number;
+      confirmationCode: string;
+      expiresAt: number;
+      _id: Id<"signInRequests">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "approvedAccountId"
+      | "claimedAt"
+      | "claimSecretHash"
+      | "confirmationCode"
+      | "expiresAt";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+    };
+    searchIndexes: {};
+    vectorIndexes: {};
+  };
+  webAuthnChallenges: {
+    document: {
+      challengeHash: string;
+      expiresAt: number;
+      purpose: "registration" | "signIn";
+      registration?: { username: string; webAuthnUserId: string };
+      _id: Id<"webAuthnChallenges">;
+      _creationTime: number;
+    };
+    fieldPaths:
+      | "_creationTime"
+      | "_id"
+      | "challengeHash"
+      | "expiresAt"
+      | "purpose"
+      | "registration"
+      | "registration.username"
+      | "registration.webAuthnUserId";
+    indexes: {
+      by_id: ["_id"];
+      by_creation_time: ["_creationTime"];
+      by_challenge_hash: ["challengeHash", "_creationTime"];
     };
     searchIndexes: {};
     vectorIndexes: {};

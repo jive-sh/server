@@ -3,6 +3,7 @@ import { Effect, pipe } from "effect";
 import { internal } from "./_generated/api";
 import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { parseConnectionKey, seal } from "./model/sealing";
+import { mintSecret, sha256Hex } from "./model/tokens";
 
 /**
  * Connections hold an organization's credentials for an outside system, sealed under `CONNECTION_KEY`. No client
@@ -17,11 +18,6 @@ import { parseConnectionKey, seal } from "./model/sealing";
 /** How long a connection request can be redeemed. */
 const REQUEST_MS = 5 * 60 * 1000;
 
-async function sha256Hex(value: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 /**
  * Issues a request to connect the organization's npm account: a random id, of which only the SHA-256 is stored,
  * redeemable once within 5 minutes, and the deployment URL to redeem it at. An action, because only actions get
@@ -33,8 +29,7 @@ export const openNpmConnectionRequest = internalAction({
   handler: async (ctx, { organizationName }) => {
     const deploymentUrl = process.env.CONVEX_CLOUD_URL;
     if (deploymentUrl === undefined) throw new Error("CONVEX_CLOUD_URL is not set on this deployment");
-    const bytes = crypto.getRandomValues(new Uint8Array(32));
-    const requestId = btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    const requestId = mintSecret("");
     await ctx.runMutation(internal.connections.storeNpmConnectionRequest, { organizationName, requestHash: await sha256Hex(requestId) });
     return { requestId, deploymentUrl };
   },

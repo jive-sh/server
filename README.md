@@ -4,10 +4,38 @@ Jive's central server: a [Convex](https://www.convex.dev) backend holding Jive's
 code repositories, connections, packages) and acting on outside systems through connectors it installs. It
 extends [`jive-abstract-backend-convex`](https://github.com/jive-sh/jive-abstract-backend-convex), whose hooks
 push the functions and publish the generated client. Design: the Jive API v1 design doc
-(`jive_api_v1_design.md` beside this package in the chaine monorepo).
+(`packages/@jive-sh/jive/docs/jive_api_v1_design.md` in the chaine monorepo).
 
-So far it does one thing: **`packages:provision`**, which a pipeline's deploy job calls right before it publishes
-a package to npm.
+So far it does two things: **people sign in** with their `jive.sh` passkey and act through sessions, which a browser
+or a program (a CLI, the Jive daemon) holds alike; and **`packages:provision`**, which a pipeline's deploy job calls
+right before it publishes a package to npm.
+
+## Signing in, and sessions
+
+Every call that acts for a person takes a **session token** (`jive_…`) as its `sessionToken` argument and nothing
+else (Alex, 2026-10-28: "There's a session token. That's it"). A token is returned once, when its session opens;
+only its SHA-256 is stored. A session lasts 12 hours and stops at once when revoked. `convex/model/sessions.ts`'s
+`resolveSession` is the one check every such function starts with.
+
+Passkeys use relying party `jive.sh`, so a passkey made on any `*.jive.sh` page (skill-sync's included) works, and
+the only accepted origin is `https://${WEBSITE_DOMAIN}` (`convex/model/webAuthn.ts`). Ceremonies are verified in
+actions with `@simplewebauthn/server`; what they record is written by one mutation, so no session exists without
+its account and passkey.
+
+| Call | Kind | What it does |
+| --- | --- | --- |
+| `auth:registrationOptions`, `auth:register` | actions | Create an account (handle derived from a random WebAuthn user id) and its passkey; opens a session |
+| `auth:signInOptions`, `auth:signIn` | actions | Usernameless sign-in with any registered passkey; opens a session |
+| `accounts:me` | query | The session's account and passkeys, or null |
+| `sessions:signOut` | mutation | Revokes the presented session |
+| `signInRequests:open`, `:describe`, `:claim` | action, query, action | Sign a program in (below) |
+
+**A program signs in through a sign-in request**, since it holds no passkey: it calls `signInRequests:open` and keeps
+the claim secret; the person opens the `loginUrl` it returns (`https://jive.sh/login?request=<id>`), checks the
+confirmation code matches, and signs in or registers there, which approves the request; the program then calls
+`signInRequests:claim` until it answers `approved` with a session token of its own. A request lasts 10 minutes and
+is claimed once. All of it is plain Convex, so a program calls it with `ConvexHttpClient` or
+`POST <deployment>/api/action`.
 
 ## How a pipeline calls it
 
@@ -59,7 +87,9 @@ package exists and its publisher has published) answers `ready`. The connection 
 
 ## Records
 
-`convex/schema.ts`: `organizations`, `connections`, `codeRepositories`, `packages`, `provisioningClaims`.
+`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `signInRequests`, `organizations`,
+`connections`, `codeRepositories`, `packages`, `provisioningClaims`. Challenges and sign-in requests are deleted
+by a scheduled function when they expire.
 
 A connection's credential (for npm: the token) is stored sealed, never in the
 clear: AES-256-GCM under `CONNECTION_KEY`, as `<nonce>.<ciphertext>` beside the key's version, the way
@@ -90,6 +120,9 @@ issue a single-use request id, valid for 5 minutes and stored only as its SHA-25
 that id to the public action `connections:completeNpmConnection` in an HTTPS body. That action stores the credential
 sealed, replacing any npm connection the organization had, and spends the id.
 
+Alex's account was made by `seed:accountWithPasskey` (once, on production, 2026-11-01) from the passkey
+skill-sync-service holds in its `credentials` table, copied, not moved, so skill-sync keeps it too.
+
 ## Verification
 
 `bun run jive:cicd:audit` typechecks and runs:
@@ -97,6 +130,10 @@ sealed, replacing any npm connection the organization had, and spends the id.
 - `test/model.test.ts`: the caller checks, the publisher decisions, sealing, and the provisioning flow against
   in-memory records and connector.
 - `test/connect-npm.test.ts`: the hidden prompt's line handling.
+- `test/auth.test.ts`: registration, sign-in, sign-out, an imported passkey, and a program's sign-in request, on the
+  local backend through `ConvexHttpClient`, with a software passkey (`test/support/softwareAuthenticator.ts`) whose
+  real WebAuthn responses `@simplewebauthn/server` verifies; a wrong origin, a reused challenge and an unknown
+  passkey are refused.
 - `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account); the npm
   connection made by running `connect-npm` with the token piped in; `packages:provision` called over HTTP with
   RS256 tokens shaped like GitHub's and signed by a key the test generates, against a fake npm registry that
@@ -106,7 +143,11 @@ sealed, replacing any npm connection the organization had, and spends the id.
 
 ## Not built yet
 
-- The other resources' calls, people signing in, and a GitHub connection (design doc §3, §7).
+- The other resources' calls, organization membership, and a GitHub connection (design doc §3, §7).
+- **Signing with the account's SSH key** (decided 2026-11-01): each account's SSH private key stored sealed under
+  `CONNECTION_KEY` as connections are, and one call, `ssh:sign({ sessionToken, data })`, returning the signature,
+  for git commit signing and SSH authentication alike. Sessions from a sign-in request are what a daemon or CLI
+  will call it with.
 - `api.jive.sh` as the deployment's domain: it still serves `@jive-sh/app`'s Worker.
 - Provisioning its own client package through Jive. Production is the deployment `adventurous-viper-740` (project
   `jive-server`, reference `latest`), which the pipeline reaches with a production deploy key (`CONVEX_DEPLOY_KEY`,

@@ -20,6 +20,39 @@ import type { GenericId as Id } from "convex/values";
  * ```
  */
 export declare const api: {
+  accounts: {
+    me: FunctionReference<
+      "query",
+      "public",
+      { sessionToken: string },
+      null | {
+        createdAt: number;
+        passkeys: Array<{ createdAt: number; credentialId: string }>;
+        username: string;
+      }
+    >;
+  };
+  auth: {
+    register: FunctionReference<
+      "action",
+      "public",
+      { challenge: string; response: any; signInRequestId?: string },
+      { expiresAt: number; sessionToken: string; username: string }
+    >;
+    registrationOptions: FunctionReference<
+      "action",
+      "public",
+      {},
+      { options: any }
+    >;
+    signIn: FunctionReference<
+      "action",
+      "public",
+      { challenge: string; response: any; signInRequestId?: string },
+      { expiresAt: number; sessionToken: string; username: string }
+    >;
+    signInOptions: FunctionReference<"action", "public", {}, { options: any }>;
+  };
   connections: {
     completeNpmConnection: FunctionReference<
       "action",
@@ -38,6 +71,42 @@ export declare const api: {
       | { reason: string; status: "refused" }
     >;
   };
+  sessions: {
+    signOut: FunctionReference<
+      "mutation",
+      "public",
+      { sessionToken: string },
+      null
+    >;
+  };
+  signInRequests: {
+    claim: FunctionReference<
+      "action",
+      "public",
+      { claimSecret: string; requestId: string },
+      | { status: "pending" }
+      | { expiresAt: number; sessionToken: string; status: "approved" }
+      | { status: "gone" }
+    >;
+    describe: FunctionReference<
+      "query",
+      "public",
+      { requestId: string },
+      null | { confirmationCode: string; status: "pending" | "approved" }
+    >;
+    open: FunctionReference<
+      "action",
+      "public",
+      {},
+      {
+        claimSecret: string;
+        confirmationCode: string;
+        expiresAt: number;
+        loginUrl: string;
+        requestId: string;
+      }
+    >;
+  };
 };
 
 /**
@@ -49,6 +118,69 @@ export declare const api: {
  * ```
  */
 export declare const internal: {
+  auth: {
+    createAccount: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        credentialId: string;
+        publicKey: string;
+        signInRequestId?: string;
+        tokenHash: string;
+        username: string;
+        webAuthnUserId: string;
+      },
+      { expiresAt: number }
+    >;
+    deleteChallenge: FunctionReference<
+      "mutation",
+      "internal",
+      { id: Id<"webAuthnChallenges"> },
+      null
+    >;
+    openSession: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        accountId: Id<"accounts">;
+        signInRequestId?: string;
+        tokenHash: string;
+      },
+      { expiresAt: number; username: string }
+    >;
+    passkeyByCredentialId: FunctionReference<
+      "query",
+      "internal",
+      { credentialId: string },
+      null | {
+        accountId: Id<"accounts">;
+        credentialId: string;
+        publicKey: string;
+      }
+    >;
+    spendChallenge: FunctionReference<
+      "mutation",
+      "internal",
+      { challengeHash: string; purpose: "registration" | "signIn" },
+      null | { registration?: { username: string; webAuthnUserId: string } }
+    >;
+    storeChallenge: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        challengeHash: string;
+        purpose: "registration" | "signIn";
+        registration?: { username: string; webAuthnUserId: string };
+      },
+      null
+    >;
+    usernameTaken: FunctionReference<
+      "query",
+      "internal",
+      { username: string },
+      boolean
+    >;
+  };
   connections: {
     openNpmConnectionRequest: FunctionReference<
       "action",
@@ -125,6 +257,17 @@ export declare const internal: {
     >;
   };
   seed: {
+    accountWithPasskey: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        credentialId: string;
+        passkeyCreatedAt: number;
+        publicKey: string;
+        webAuthnUserId: string;
+      },
+      { created: boolean; username: string }
+    >;
     organizationWithRepository: FunctionReference<
       "mutation",
       "internal",
@@ -141,6 +284,28 @@ export declare const internal: {
         codeRepositoryId: Id<"codeRepositories">;
         organizationId: Id<"organizations">;
       }
+    >;
+  };
+  signInRequests: {
+    claimWithToken: FunctionReference<
+      "mutation",
+      "internal",
+      { claimSecretHash: string; requestId: string; tokenHash: string },
+      | { status: "pending" }
+      | { expiresAt: number; status: "approved" }
+      | { status: "gone" }
+    >;
+    deleteRequest: FunctionReference<
+      "mutation",
+      "internal",
+      { id: Id<"signInRequests"> },
+      null
+    >;
+    store: FunctionReference<
+      "mutation",
+      "internal",
+      { claimSecretHash: string; confirmationCode: string },
+      { expiresAt: number; requestId: string }
     >;
   };
 };

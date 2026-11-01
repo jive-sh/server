@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
+import { usernameFor } from "./model/naming";
 
 /**
  * Scaffolding until `organizations.create` and `codeRepositories.provision` exist (design doc §3, §12 step 3):
@@ -29,5 +30,31 @@ export const organizationWithRepository = internalMutation({
     }
     const codeRepositoryId = await ctx.db.insert("codeRepositories", { organizationId, ...repository });
     return { organizationId, codeRepositoryId };
+  },
+});
+
+/**
+ * One-off bootstrap, run once on production with `convex run seed:accountWithPasskey` (2026-11-01): the account for
+ * a passkey that already exists with relying party `jive.sh`, copied from skill-sync-service's `credentials` table
+ * (its credential id and COSE public key, neither secret), so its owner signs in to Jive with the passkey they
+ * have. `webAuthnUserId` names the account (its handle is derived from it); skill-sync registered the passkey under
+ * the user handle "owner", which signing in never reads. Idempotent: a passkey already imported is left alone.
+ */
+export const accountWithPasskey = internalMutation({
+  args: { webAuthnUserId: v.string(), credentialId: v.string(), publicKey: v.string(), passkeyCreatedAt: v.number() },
+  returns: v.object({ username: v.string(), created: v.boolean() }),
+  handler: async (ctx, { webAuthnUserId, credentialId, publicKey, passkeyCreatedAt }) => {
+    const existing = await ctx.db.query("passkeys").withIndex("by_credential_id", (q) => q.eq("credentialId", credentialId)).unique();
+    if (existing !== null) {
+      const account = await ctx.db.get(existing.accountId);
+      return { username: account?.username ?? "", created: false };
+    }
+    const username = usernameFor(webAuthnUserId);
+    if (await ctx.db.query("accounts").withIndex("by_username", (q) => q.eq("username", username)).first() !== null) {
+      throw new Error(`the handle ${username} is taken; pass another webAuthnUserId`);
+    }
+    const accountId = await ctx.db.insert("accounts", { username, webAuthnUserId, createdAt: Date.now() });
+    await ctx.db.insert("passkeys", { accountId, credentialId, publicKey, createdAt: passkeyCreatedAt });
+    return { username, created: true };
   },
 });

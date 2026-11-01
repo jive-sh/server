@@ -1,4 +1,5 @@
 import { Data, Effect } from "effect";
+import { fromBase64Url, toBase64Url } from "./tokens";
 
 /**
  * Credentials at rest, sealed the way @jive-sh/app seals connection payloads (its `src/modules/crypto/impl.ts`,
@@ -46,16 +47,6 @@ export function parseConnectionKey(maybeValue: string | undefined): Effect.Effec
     }
     return Effect.succeed({ version, key });
   });
-}
-
-function toBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-function fromBase64Url(value: string): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), (character) => character.charCodeAt(0));
 }
 
 function importKey(key: Uint8Array<ArrayBuffer>, usage: "encrypt" | "decrypt"): Promise<CryptoKey> {
