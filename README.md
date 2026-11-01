@@ -6,9 +6,10 @@ extends [`jive-abstract-backend-convex`](https://github.com/jive-sh/jive-abstrac
 push the functions and publish the generated client. Design: the Jive API v1 design doc
 (`packages/@jive-sh/jive/docs/jive_api_v1_design.md` in the chaine monorepo).
 
-So far it does two things: **people sign in** with their `jive.sh` passkey and act through sessions, which a browser
-or a program (a CLI, the Jive daemon) holds alike; and **`packages:provision`**, which a pipeline's deploy job calls
-right before it publishes a package to npm.
+So far it does three things: **people sign in** with their `jive.sh` passkey and act through sessions, which a
+browser or a program (a CLI, the Jive daemon) holds alike; it **signs with each account's SSH key**, which it holds so
+no client has to; and **`packages:provision`**, which a pipeline's deploy job calls right before it publishes a
+package to npm.
 
 ## Signing in, and sessions
 
@@ -36,6 +37,25 @@ confirmation code matches, and signs in or registers there, which approves the r
 `signInRequests:claim` until it answers `approved` with a session token of its own. A request lasts 10 minutes and
 is claimed once. All of it is plain Convex, so a program calls it with `ConvexHttpClient` or
 `POST <deployment>/api/action`.
+
+## Signing with the account's SSH key
+
+Alex (2026-11-01): "The ssh key will be saved on the account, and a ssh signing request paired with a session token
+would have jive internally load the ssh key and sign the request". Each account has at most one ed25519 key,
+generated on the server; its private key never leaves it, sealed under `CONNECTION_KEY` as connections are
+(`convex/ssh.ts`, `convex/model/sshKeys.ts`).
+
+| Call | Kind | What it does |
+| --- | --- | --- |
+| `ssh:createKey({ sessionToken })` | action | Creates the account's key on the first call; returns its OpenSSH public key (`ssh-ed25519 … <handle>@jive.sh`) every time |
+| `ssh:publicKey({ sessionToken })` | query | The public key, or null before `createKey` |
+| `ssh:sign({ sessionToken, data })` | action | Signs `data` (bytes) and returns `signature` (bytes) in SSH's encoding, `string "ssh-ed25519" \|\| string <64-byte signature>` |
+
+`sign` returns exactly what an SSH agent puts in `SSH_AGENT_SIGN_RESPONSE`, and never reads `data`, so a local agent
+holding no key forwards each sign request's data as it arrives: the SSHSIG blob `ssh-keygen -Y sign` builds for a
+git commit, or the session-bound blob of an SSH authentication. The public key goes on GitHub as both an
+authentication key and a signing key. The agent signs in once through a sign-in request (above) and calls `sign`
+with its session token; a revoked or expired session signs nothing.
 
 ## How a pipeline calls it
 
@@ -87,7 +107,7 @@ package exists and its publisher has published) answers `ready`. The connection 
 
 ## Records
 
-`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `signInRequests`, `organizations`,
+`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `sshKeys`, `signInRequests`, `organizations`,
 `connections`, `codeRepositories`, `packages`, `provisioningClaims`. Challenges and sign-in requests are deleted
 by a scheduled function when they expire.
 
@@ -134,6 +154,10 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
   local backend through `ConvexHttpClient`, with a software passkey (`test/support/softwareAuthenticator.ts`) whose
   real WebAuthn responses `@simplewebauthn/server` verifies; a wrong origin, a reused challenge and an unknown
   passkey are refused.
+- `test/ssh.test.ts`: a signed-in account's key is created once, read by `ssh-keygen -l` as ED25519, and stored
+  sealed; a git commit signature assembled from `ssh:sign` the way `ssh-keygen -Y sign` assembles one over an
+  agent passes the real `ssh-keygen -Y verify` (and fails for another commit); an SSH authentication blob's
+  signature verifies against the public key; a made-up or revoked session, and an account with no key, are refused.
 - `test/provision.test.ts`: the package pushed to an anonymous local Convex backend (no Convex account); the npm
   connection made by running `connect-npm` with the token piped in; `packages:provision` called over HTTP with
   RS256 tokens shaped like GitHub's and signed by a key the test generates, against a fake npm registry that
@@ -144,10 +168,8 @@ skill-sync-service holds in its `credentials` table, copied, not moved, so skill
 ## Not built yet
 
 - The other resources' calls, organization membership, and a GitHub connection (design doc §3, §7).
-- **Signing with the account's SSH key** (decided 2026-11-01): each account's SSH private key stored sealed under
-  `CONNECTION_KEY` as connections are, and one call, `ssh:sign({ sessionToken, data })`, returning the signature,
-  for git commit signing and SSH authentication alike. Sessions from a sign-in request are what a daemon or CLI
-  will call it with.
+- The local SSH agent that forwards sign requests to `ssh:sign` (the client side; ozy-cli's signing agent still
+  derives its key on the machine).
 - `api.jive.sh` as the deployment's domain: it still serves `@jive-sh/app`'s Worker.
 - Provisioning its own client package through Jive. Production is the deployment `adventurous-viper-740` (project
   `jive-server`, reference `latest`), which the pipeline reaches with a production deploy key (`CONVEX_DEPLOY_KEY`,

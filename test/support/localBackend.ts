@@ -18,6 +18,8 @@ export const LOCAL_ENV = {
   CONVEX_AGENT_MODE: "anonymous",
 };
 export const TIMEOUT = 3 * 60 * 1000;
+/** The `CONNECTION_KEY` every test file sets on the shared local deployment, so none unseals another's values with a different key. */
+export const TEST_CONNECTION_KEY = `1:${btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))}`;
 
 export async function run(command: ReadonlyArray<string>) {
   // Async, never spawnSync: a fake server in the test process must keep answering meanwhile.

@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { Effect, pipe } from "effect";
 import { internal } from "./_generated/api";
 import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { parseConnectionKey, seal } from "./model/sealing";
+import { sealWithDeploymentKey } from "./model/sealing";
 import { mintSecret, sha256Hex } from "./model/tokens";
 
 /**
@@ -71,14 +71,8 @@ export const completeNpmConnection = action({
     if (organizationId === null) throw new Error("the connection request is unknown, already used or expired; run connect-npm again");
     if (token.trim() === "") throw new Error("the npm token is empty");
     const credential = JSON.stringify({ token });
-    const { sealedCredential, keyVersion } = await Effect.runPromise(pipe(
-      Effect.gen(function* () {
-        const key = yield* parseConnectionKey(process.env.CONNECTION_KEY);
-        return { sealedCredential: yield* seal(key, credential), keyVersion: key.version };
-      }),
-      Effect.mapError((e) => new Error(e.message)),
-    ));
-    await ctx.runMutation(internal.connections.replaceNpmConnection, { organizationId, sealedCredential, keyVersion });
+    const { sealed, keyVersion } = await Effect.runPromise(pipe(sealWithDeploymentKey(credential), Effect.mapError((e) => new Error(e.message))));
+    await ctx.runMutation(internal.connections.replaceNpmConnection, { organizationId, sealedCredential: sealed, keyVersion });
     return null;
   },
 });

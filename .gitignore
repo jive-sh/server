@@ -5,3 +5,6 @@ package.schema.json
 # The anonymous local Convex deployment tests run against
 .convex
 .env.local
+
+# Files the SSH signing test hands ssh-keygen; deleted after each run
+.test-ssh

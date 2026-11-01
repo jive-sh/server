@@ -3,6 +3,7 @@ import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import { TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
+import { registerAccount } from "./support/accounts";
 import { createSoftwarePasskey, type SoftwarePasskey } from "./support/softwareAuthenticator";
 
 /**
@@ -25,11 +26,7 @@ afterAll(async () => {
   await devServer?.stop();
 });
 
-async function register(passkey: SoftwarePasskey, signInRequestId?: string) {
-  const { options } = await client.action(api.auth.registrationOptions, {});
-  const response = await passkey.register(options);
-  return await client.action(api.auth.register, { challenge: options.challenge, response, ...(signInRequestId === undefined ? {} : { signInRequestId }) });
-}
+const register = (passkey: SoftwarePasskey, signInRequestId?: string) => registerAccount(client, passkey, signInRequestId);
 
 async function signIn(passkey: SoftwarePasskey, input: { readonly signInRequestId?: string; readonly origin?: string } = {}) {
   const { options } = await client.action(api.auth.signInOptions, {});

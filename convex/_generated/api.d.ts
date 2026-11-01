@@ -107,6 +107,26 @@ export declare const api: {
       }
     >;
   };
+  ssh: {
+    createKey: FunctionReference<
+      "action",
+      "public",
+      { sessionToken: string },
+      { publicKey: string }
+    >;
+    publicKey: FunctionReference<
+      "query",
+      "public",
+      { sessionToken: string },
+      null | { publicKey: string }
+    >;
+    sign: FunctionReference<
+      "action",
+      "public",
+      { data: ArrayBuffer; sessionToken: string },
+      { signature: ArrayBuffer }
+    >;
+  };
 };
 
 /**
@@ -306,6 +326,35 @@ export declare const internal: {
       "internal",
       { claimSecretHash: string; confirmationCode: string },
       { expiresAt: number; requestId: string }
+    >;
+  };
+  ssh: {
+    caller: FunctionReference<
+      "query",
+      "internal",
+      { sessionToken: string },
+      null | {
+        accountId: Id<"accounts">;
+        publicKey: null | string;
+        username: string;
+      }
+    >;
+    sealedKey: FunctionReference<
+      "query",
+      "internal",
+      { sessionToken: string },
+      null | { sealed: null | { keyVersion: number; sealedPrivateKey: string } }
+    >;
+    storeKey: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        accountId: Id<"accounts">;
+        keyVersion: number;
+        publicKey: string;
+        sealedPrivateKey: string;
+      },
+      string
     >;
   };
 };

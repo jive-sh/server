@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { LOCAL_ENV, SERVER_DIR, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
+import { LOCAL_ENV, SERVER_DIR, TEST_CONNECTION_KEY, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
 
 /**
  * `packages:provision` end to end, inside Convex's runtime: this package pushed to an anonymous local Convex
@@ -13,7 +13,6 @@ const ISSUER = "https://token.actions.githubusercontent.com";
 const AUDIENCE = "https://api.jive.sh";
 const PACKAGE = "@chaine.dance/jive-test-package";
 const NPM_TOKEN = "npm-test-token";
-const CONNECTION_KEY = `1:${btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))}`;
 const REPOSITORY = { repositoryId: "900001", repositoryOwnerId: "900002", owner: "chaine-dance", name: "jive-test-package" };
 
 function base64Url(bytes: Uint8Array | string): string {
@@ -129,7 +128,7 @@ beforeAll(async () => {
     },
   });
 
-  await initLocalDeployment({ GITHUB_ACTIONS_JWKS: trusted.jwks, CONNECTION_KEY, NPM_REGISTRY_URL: `http://127.0.0.1:${registry.port}` });
+  await initLocalDeployment({ GITHUB_ACTIONS_JWKS: trusted.jwks, CONNECTION_KEY: TEST_CONNECTION_KEY, NPM_REGISTRY_URL: `http://127.0.0.1:${registry.port}` });
 
   devServer = await startDevServer();
   convexUrl = devServer.url;

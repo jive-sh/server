@@ -76,3 +76,40 @@ export function open(key: ConnectionKey, sealed: string): Effect.Effect<string, 
     catch: () => new SealedValueUnreadable(),
   });
 }
+
+/** A value was sealed under another version of `CONNECTION_KEY` than the deployment holds. */
+export class SealedUnderOtherKeyVersion extends Data.TaggedError("SealedUnderOtherKeyVersion")<{
+  readonly sealedVersion: number;
+  readonly deploymentVersion: number;
+}> {
+  override get message(): string {
+    return `a credential is sealed under CONNECTION_KEY version ${this.sealedVersion}, but the deployment holds version ${this.deploymentVersion}`;
+  }
+}
+
+/** A sealed value as stored: `<nonce>.<ciphertext>` beside the version of the key that sealed it. */
+export interface SealedValue {
+  readonly sealed: string;
+  readonly keyVersion: number;
+}
+
+/** Seals under the deployment's own `CONNECTION_KEY`. */
+export function sealWithDeploymentKey(plaintext: string): Effect.Effect<SealedValue, ConnectionKeyUnusable> {
+  return Effect.gen(function* () {
+    const key = yield* parseConnectionKey(process.env.CONNECTION_KEY);
+    return { sealed: yield* seal(key, plaintext), keyVersion: key.version };
+  });
+}
+
+/** Opens a value sealed under the deployment's own `CONNECTION_KEY`. */
+export function openWithDeploymentKey(
+  value: SealedValue,
+): Effect.Effect<string, ConnectionKeyUnusable | SealedUnderOtherKeyVersion | SealedValueUnreadable> {
+  return Effect.gen(function* () {
+    const key = yield* parseConnectionKey(process.env.CONNECTION_KEY);
+    if (key.version !== value.keyVersion) {
+      return yield* new SealedUnderOtherKeyVersion({ sealedVersion: value.keyVersion, deploymentVersion: key.version });
+    }
+    return yield* open(key, value.sealed);
+  });
+}

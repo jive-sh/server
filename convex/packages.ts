@@ -13,7 +13,7 @@ import {
   type IRegistryConnector,
   type NpmAccount,
 } from "./model/provisioning";
-import { open, parseConnectionKey } from "./model/sealing";
+import { openWithDeploymentKey } from "./model/sealing";
 
 /** How long a provisioning's claim on a package lasts before another caller may take it over (§9). */
 const CLAIM_MS = 5 * 60 * 1000;
@@ -45,11 +45,10 @@ function recordsOver(ctx: ActionCtx): IProvisioningRecords {
     npmAccount: (organizationId) => Effect.gen(function* () {
       const sealed = yield* call(() => ctx.runQuery(internal.connections.sealedNpmConnection, { organizationId: organizationId as Id<"organizations"> }));
       if (sealed === null) return Option.none<NpmAccount>();
-      const key = yield* pipe(parseConnectionKey(process.env.CONNECTION_KEY), Effect.mapError((e) => new Error(e.message)));
-      if (key.version !== sealed.keyVersion) {
-        return yield* Effect.fail(new Error(`the npm connection is sealed under CONNECTION_KEY version ${sealed.keyVersion}, but the deployment holds version ${key.version}`));
-      }
-      const plaintext = yield* pipe(open(key, sealed.sealedCredential), Effect.mapError((e) => new Error(e.message)));
+      const plaintext = yield* pipe(
+        openWithDeploymentKey({ sealed: sealed.sealedCredential, keyVersion: sealed.keyVersion }),
+        Effect.mapError((e) => new Error(`the npm connection: ${e.message}`)),
+      );
       const credential = yield* pipe(
         Schema.decodeUnknownEffect(NpmCredential)(plaintext),
         // The schema error would quote the plaintext, which holds the credential.
