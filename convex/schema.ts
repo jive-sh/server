@@ -90,6 +90,11 @@ export default defineSchema({
    */
   signInRequests: defineTable({
     claimSecretHash: v.string(),
+    /**
+     * Only requests opened before 0.8.0 carry it; nothing writes or reads it. Each such request is deleted when it
+     * expires (10 minutes), so the field goes in the release after this one.
+     */
+    confirmationCode: v.optional(v.string()),
     approvedAccountId: v.optional(v.id("accounts")),
     claimedAt: v.optional(v.number()),
     expiresAt: v.number(),
