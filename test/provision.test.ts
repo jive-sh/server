@@ -252,7 +252,7 @@ describe("provisioning", () => {
   test("a new package answers personNeeded with only npm's second-factor page, publishing nothing", async () => {
     expect(await provision(await signedIn({}))).toEqual({ httpStatus: 200, body: expect.objectContaining({ status: "success", value: {
       status: "personNeeded",
-      reason: `npm asks for its second factor to publish ${PACKAGE}'s placeholder`,
+      reason: `npm asks for its security key to publish ${PACKAGE}'s placeholder`,
       url: SECOND_FACTOR_PAGE,
     } }) });
     expect(npm.publishes).toEqual([]);
@@ -262,7 +262,7 @@ describe("provisioning", () => {
   test("packages:provision answers the same as refused, naming npm's page", async () => {
     expect((await packagesProvision(await signedIn({}))).body.value).toEqual({
       status: "refused",
-      reason: `npm asks for its second factor to publish ${PACKAGE}'s placeholder: ${SECOND_FACTOR_PAGE}`,
+      reason: `npm asks for its security key to publish ${PACKAGE}'s placeholder: ${SECOND_FACTOR_PAGE}`,
     });
   }, TIMEOUT);
 
