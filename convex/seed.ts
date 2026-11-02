@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { internalMutation } from "./_generated/server";
 import { usernameFor } from "./model/naming";
 import { resourceKindNamed } from "./model/resourceKinds";
@@ -56,6 +57,8 @@ export const accountWithPasskey = internalMutation({
     }
     const accountId = await ctx.db.insert("accounts", { username, webAuthnUserId, createdAt: Date.now() });
     await ctx.db.insert("passkeys", { accountId, credentialId, publicKey, createdAt: passkeyCreatedAt });
+    // Every account has its SSH key; a mutation cannot create one, so it is scheduled.
+    await ctx.scheduler.runAfter(0, internal.ssh.ensureKey, { accountId, username });
     return { username, created: true };
   },
 });

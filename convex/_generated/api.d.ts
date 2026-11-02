@@ -210,17 +210,11 @@ export declare const api: {
     >;
   };
   ssh: {
-    createKey: FunctionReference<
-      "action",
-      "public",
-      { sessionToken: string },
-      { publicKey: string }
-    >;
     publicKey: FunctionReference<
       "query",
       "public",
       { sessionToken: string },
-      null | { publicKey: string }
+      { publicKey: string }
     >;
     sign: FunctionReference<
       "action",
@@ -289,7 +283,7 @@ export declare const internal: {
         username: string;
         webAuthnUserId: string;
       },
-      { expiresAt: number }
+      { accountId: Id<"accounts">; expiresAt: number }
     >;
     deleteChallenge: FunctionReference<
       "mutation",
@@ -483,45 +477,28 @@ export declare const internal: {
     >;
   };
   ssh: {
+    accounts: FunctionReference<
+      "query",
+      "internal",
+      {},
+      Array<{ accountId: Id<"accounts">; username: string }>
+    >;
+    afterDeploy: FunctionReference<
+      "action",
+      "internal",
+      { environment: string; sourceCommitSha: string },
+      { accounts: number; created: number }
+    >;
     caller: FunctionReference<
       "query",
       "internal",
       { sessionToken: string },
       null | { accountId: Id<"accounts">; username: string }
     >;
-    insertLegacy: FunctionReference<
-      "mutation",
+    ensureKey: FunctionReference<
+      "action",
       "internal",
-      {
-        accountId: Id<"accounts">;
-        createdAt: number;
-        keyVersion: number;
-        publicKey: string;
-        sealedPrivateKey: string;
-      },
-      null
-    >;
-    legacyKey: FunctionReference<
-      "query",
-      "internal",
-      { accountId: Id<"accounts"> },
-      null | {
-        createdAt: number;
-        keyVersion: number;
-        publicKey: string;
-        sealedPrivateKey: string;
-      }
-    >;
-    migrateToAccountKeys: FunctionReference<
-      "mutation",
-      "internal",
-      { environment: string; sourceCommitSha: string },
-      { alreadyPresent: number; copied: number }
-    >;
-    removeLegacy: FunctionReference<
-      "mutation",
-      "internal",
-      { accountId: Id<"accounts"> },
+      { accountId: Id<"accounts">; username: string },
       null
     >;
     sealedKey: FunctionReference<

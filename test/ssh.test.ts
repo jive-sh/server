@@ -3,16 +3,13 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
-import { Effect } from "effect";
 import { api } from "../convex/_generated/api";
-import { generateSshKey } from "../convex/components/accountKeys/sshKeys";
-import { parseConnectionKey, seal } from "../convex/model/sealing";
 import { registerAccount } from "./support/accounts";
-import { SERVER_DIR, TEST_CONNECTION_KEY, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, run as convexCli, startDevServer, type DevServer } from "./support/localBackend";
+import { SERVER_DIR, TEST_CONNECTION_KEY, TIMEOUT, convex, generateGithubActionsJwks, initLocalDeployment, startDevServer, type DevServer } from "./support/localBackend";
 import { createSoftwarePasskey } from "./support/softwareAuthenticator";
 
 /**
- * Signing with the account's SSH key, end to end on the local backend: a signed-in account creates its key, then
+ * Signing with the account's SSH key, end to end on the local backend: an account has its key from sign-up, and
  * signs what a local SSH agent would forward. A git commit signature is assembled the way `ssh-keygen -Y sign`
  * assembles one over an agent and checked by the real `ssh-keygen`; an authentication signature is checked against
  * the OpenSSH public key with Web Crypto.
@@ -73,25 +70,22 @@ async function refusal(call: Promise<unknown>): Promise<string> {
 }
 
 describe("the account's SSH key", () => {
-  test("is created once, as an ed25519 OpenSSH public key that ssh-keygen reads", async () => {
+  test("exists as soon as sign-up returns, as an ed25519 OpenSSH public key that ssh-keygen reads", async () => {
     const sessionToken = await signedIn();
-    expect(await client.query(api.ssh.publicKey, { sessionToken })).toBeNull();
-    const { publicKey } = await client.action(api.ssh.createKey, { sessionToken });
+    const { publicKey } = await client.query(api.ssh.publicKey, { sessionToken });
     expect(publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]+=* [a-z]+-[a-z]+-[a-z]+@jive\.sh$/);
-    expect(await client.action(api.ssh.createKey, { sessionToken })).toEqual({ publicKey });
     expect(await client.query(api.ssh.publicKey, { sessionToken })).toEqual({ publicKey });
     writeFileSync(resolve(SCRATCH_DIR, "key.pub"), `${publicKey}\n`);
     const fingerprint = await run(["ssh-keygen", "-l", "-f", "key.pub"]);
     expect(fingerprint.exitCode, fingerprint.output).toBe(0);
     expect(fingerprint.output).toContain("(ED25519)");
 
-    const other = await client.action(api.ssh.createKey, { sessionToken: await signedIn() });
+    const other = await client.query(api.ssh.publicKey, { sessionToken: await signedIn() });
     expect(other.publicKey.split(" ")[1]).not.toBe(publicKey.split(" ")[1]);
   }, TIMEOUT);
 
   test("is stored sealed under CONNECTION_KEY", async () => {
     const sessionToken = await signedIn();
-    await client.action(api.ssh.createKey, { sessionToken });
     const stored = JSON.parse(await convex(["run", "ssh:sealedKey", JSON.stringify({ sessionToken })]));
     expect(stored.sealed.keyVersion).toBe(1);
     expect(stored.sealed.sealedPrivateKey).toMatch(/^[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+$/);
@@ -103,7 +97,7 @@ describe("the account's SSH key", () => {
 describe("signing", () => {
   test("signs a git commit: the SSHSIG signature ssh-keygen -Y sign would build over an agent checks out", async () => {
     const sessionToken = await signedIn();
-    const { publicKey } = await client.action(api.ssh.createKey, { sessionToken });
+    const { publicKey } = await client.query(api.ssh.publicKey, { sessionToken });
     const commit = text("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor Jive <a@jive.sh> 1793522489 +0000\n\nsigned on the server\n");
 
     // PROTOCOL.sshsig: the agent is asked to sign this blob, and the armored signature wraps its answer.
@@ -129,7 +123,7 @@ describe("signing", () => {
 
   test("signs an SSH authentication blob, verifiable with the account's public key", async () => {
     const sessionToken = await signedIn();
-    const { publicKey } = await client.action(api.ssh.createKey, { sessionToken });
+    const { publicKey } = await client.query(api.ssh.publicKey, { sessionToken });
     // RFC 4252 §7's signed data: session id, SSH_MSG_USERAUTH_REQUEST, user, service, "publickey", TRUE, algorithm, key.
     const blob = concat(sshString(crypto.getRandomValues(new Uint8Array(32))), Uint8Array.from([50]), sshString(text("git")),
       sshString(text("ssh-connection")), sshString(text("publickey")), Uint8Array.from([1]), sshString(text("ssh-ed25519")), sshString(keyBlobOf(publicKey)));
@@ -146,106 +140,41 @@ describe("signing", () => {
     expect(await crypto.subtle.verify({ name: "Ed25519" }, key, raw, concat(blob, Uint8Array.from([0])))).toBe(false);
   }, TIMEOUT);
 
-  test("refuses a made-up or revoked session, and an account with no key", async () => {
+  test("refuses a made-up or revoked session", async () => {
     const data = text("anything").buffer;
     expect(await refusal(client.action(api.ssh.sign, { sessionToken: "jive_not-a-token", data }))).toContain("no live session");
 
-    const withoutKey = await signedIn();
-    expect(await refusal(client.action(api.ssh.sign, { sessionToken: withoutKey, data }))).toContain("no SSH key");
-
     const sessionToken = await signedIn();
-    await client.action(api.ssh.createKey, { sessionToken });
     await client.mutation(api.sessions.signOut, { sessionToken });
     expect(await refusal(client.action(api.ssh.sign, { sessionToken, data }))).toContain("no live session");
-    expect(await refusal(client.action(api.ssh.createKey, { sessionToken }))).toContain("no live session");
+    expect(await refusal(client.query(api.ssh.publicKey, { sessionToken }))).toContain("no live session");
   }, TIMEOUT);
 });
 
-describe("a key written before the component", () => {
-  const callerOf = async (sessionToken: string) =>
-    JSON.parse(await convex(["run", "ssh:caller", JSON.stringify({ sessionToken })])) as { accountId: string; username: string };
-
-  /** A real ed25519 key, sealed the way production stored one, inserted as this account's pre-component row. */
-  const plantLegacy = async (sessionToken: string) => {
-    const caller = await callerOf(sessionToken);
-    const generated = await generateSshKey(`${caller.username}@jive.sh`);
-    const connectionKey = await Effect.runPromise(parseConnectionKey(TEST_CONNECTION_KEY));
-    const sealedPrivateKey = await Effect.runPromise(seal(connectionKey, generated.privateKeyPkcs8));
-    const row = {
-      accountId: caller.accountId,
-      publicKey: generated.publicKey,
-      sealedPrivateKey,
-      keyVersion: connectionKey.version,
-      createdAt: 1_700_000_000_000,
-    };
-    await convex(["run", "ssh:insertLegacy", JSON.stringify(row)]);
-    return row;
-  };
-
-  const storedSeal = async (sessionToken: string) =>
-    JSON.parse(await convex(["run", "ssh:sealedKey", JSON.stringify({ sessionToken })])) as {
-      sealed: { sealedPrivateKey: string; keyVersion: number };
-    };
-
-  const verifies = async (publicKey: string, data: Uint8Array, signature: Uint8Array) => {
-    const view = new DataView(signature.buffer, signature.byteOffset, signature.byteLength);
-    const raw = new Uint8Array(signature.slice(8 + view.getUint32(0)));
-    const rawPublicKey = new Uint8Array(keyBlobOf(publicKey).slice(4 + 11 + 4));
-    const payload = new Uint8Array(data);
-    const key = await crypto.subtle.importKey("raw", rawPublicKey, { name: "Ed25519" }, false, ["verify"]);
-    return crypto.subtle.verify({ name: "Ed25519" }, key, raw, payload);
-  };
-
-  test("createKey returns that key and signs with it, and a second call does not mint another", async () => {
-    const sessionToken = await signedIn();
-    const legacy = await plantLegacy(sessionToken);
-    expect(await client.query(api.ssh.publicKey, { sessionToken })).toBeNull();
-    const { publicKey } = await client.action(api.ssh.createKey, { sessionToken });
-    expect(publicKey).toBe(legacy.publicKey);
-    expect(await client.action(api.ssh.createKey, { sessionToken })).toEqual({ publicKey });
-    expect(await client.query(api.ssh.publicKey, { sessionToken })).toEqual({ publicKey });
-    expect(await storedSeal(sessionToken)).toEqual({ sealed: { sealedPrivateKey: legacy.sealedPrivateKey, keyVersion: legacy.keyVersion } });
-    const data = text("the key that was already there");
-    expect(await verifies(publicKey, data, await sign(sessionToken, data))).toBe(true);
-  }, TIMEOUT);
-
-  test("the deploy migration copies every row once, still sealed", async () => {
-    const sessionToken = await signedIn();
-    const legacy = await plantLegacy(sessionToken);
-    const args = JSON.stringify({ sourceCommitSha: "migration-test", environment: "latest" });
-    const first = JSON.parse(await convex(["run", "ssh:migrateToAccountKeys", args])) as { copied: number; alreadyPresent: number };
-    expect(first.copied).toBeGreaterThanOrEqual(1);
-    const second = JSON.parse(await convex(["run", "ssh:migrateToAccountKeys", args])) as { copied: number; alreadyPresent: number };
-    expect(second.copied).toBe(0);
-    expect(second.alreadyPresent).toBe(first.copied + first.alreadyPresent);
-    expect(await storedSeal(sessionToken)).toEqual({ sealed: { sealedPrivateKey: legacy.sealedPrivateKey, keyVersion: legacy.keyVersion } });
-    expect(await client.action(api.ssh.createKey, { sessionToken })).toEqual({ publicKey: legacy.publicKey });
-    const data = text("copied by the migration");
-    expect(await verifies(legacy.publicKey, data, await sign(sessionToken, data))).toBe(true);
-  }, TIMEOUT);
-
-  test("a different public key already stored is left as it is", async () => {
-    const sessionToken = await signedIn();
-    const { publicKey } = await client.action(api.ssh.createKey, { sessionToken });
-    const before = await storedSeal(sessionToken);
-    const caller = await callerOf(sessionToken);
-    try {
-      await convex(["run", "ssh:insertLegacy", JSON.stringify({
-        accountId: caller.accountId,
-        publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA not-the-stored-key@jive.sh",
-        sealedPrivateKey: "aaaaaaaaaaaaaaaa.not-the-stored-ciphertext",
-        keyVersion: 1,
-        createdAt: 1,
-      })]);
-      const migrated = await convexCli(["bunx", "convex", "run", "ssh:migrateToAccountKeys", JSON.stringify({ sourceCommitSha: "mismatch", environment: "latest" })]);
-      expect(migrated.exitCode, `${migrated.stdout}\n${migrated.stderr}`).not.toBe(0);
-      expect(`${migrated.stdout}\n${migrated.stderr}`).toContain("different SSH key");
-      expect(await client.query(api.ssh.publicKey, { sessionToken })).toEqual({ publicKey });
-      expect(await storedSeal(sessionToken)).toEqual(before);
-      expect(await refusal(client.action(api.ssh.createKey, { sessionToken }))).toContain("different SSH key");
-    } finally {
-      await convex(["run", "ssh:removeLegacy", JSON.stringify({ accountId: caller.accountId })]);
+describe("every account has its key", () => {
+  test("an account the seed command creates gets its key too", async () => {
+    const webAuthnUserId = crypto.randomUUID();
+    const seeded = JSON.parse(await convex(["run", "seed:accountWithPasskey", JSON.stringify({
+      webAuthnUserId, credentialId: `seeded-${webAuthnUserId}`, publicKey: "not-used-here", passkeyCreatedAt: 1,
+    })])) as { username: string; created: boolean };
+    expect(seeded.created).toBe(true);
+    const accounts = async () => JSON.parse(await convex(["run", "ssh:accounts", "{}"])) as Array<{ accountId: string; username: string }>;
+    const seededAccount = (await accounts()).find((account) => account.username === seeded.username)!;
+    // The seed is a mutation, so the key is made by the action it schedules; wait for it.
+    let key = null;
+    for (let attempt = 0; attempt < 20 && key === null; attempt += 1) {
+      key = JSON.parse(await convex(["run", "--component", "accountKeys", "ssh:publicKey", JSON.stringify({ accountId: seededAccount.accountId })]));
+      if (key === null) await Bun.sleep(500);
     }
+    expect(key).toMatchObject({ publicKey: expect.stringMatching(new RegExp(`^ssh-ed25519 \\S+ ${seeded.username}@jive\\.sh$`)) });
+  }, TIMEOUT);
+
+  test("the deploy's after-deploy step finds every account with a key, and creates none twice", async () => {
+    const args = JSON.stringify({ sourceCommitSha: "after-deploy-test", environment: "latest" });
+    const first = JSON.parse(await convex(["run", "ssh:afterDeploy", args])) as { accounts: number; created: number };
+    expect(first.accounts).toBeGreaterThan(0);
+    const second = JSON.parse(await convex(["run", "ssh:afterDeploy", args])) as { accounts: number; created: number };
+    expect(second).toEqual({ accounts: first.accounts, created: 0 });
   }, TIMEOUT);
 });
 

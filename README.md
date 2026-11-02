@@ -74,18 +74,17 @@ for is forgotten. `test/phone-approval.test.ts` runs the whole flow against a fa
 ## Signing with the account's SSH key
 
 Alex (2026-11-01): "The ssh key will be saved on the account, and a ssh signing request paired with a session token
-would have jive internally load the ssh key and sign the request". Each account has at most one ed25519 key,
-generated in the `accountKeys` component; its private key never leaves the server, sealed under `CONNECTION_KEY`.
-`convex/ssh.ts` checks the session and calls the component. Keys written before the component stay in the app
-table `sshKeys`. The deploy runs `ssh:migrateToAccountKeys` after the push and copies each row, still sealed,
-under the same account and the same public key. `ssh:createKey` and `ssh:sign` copy that account's row first, so
-a key that is already there is the one returned and a second one is not minted. The app table stays until a later
-commit, after that copy has run on production and the counts match. The calls below are unchanged.
+would have jive internally load the ssh key and sign the request", and "There's just an ssh sign request. You don't
+create keys. You can fetch the public key or sign". Each account has exactly one ed25519 key, held in the
+`accountKeys` component; its private key never leaves the server, sealed under `CONNECTION_KEY`.
+- **Sign-up:** `auth:register` creates the key before it returns, so an account has it from its first session.
+  `seed:accountWithPasskey` schedules the same.
+- **Deploy:** `ssh:afterDeploy` (the deploy's after-deploy step) gives any account without a key one.
+- **Calls:** `convex/ssh.ts` checks the session and calls the component. These two are the whole public API:
 
 | Call | Kind | What it does |
 | --- | --- | --- |
-| `ssh:createKey({ sessionToken })` | action | Creates the account's key on the first call; returns its OpenSSH public key (`ssh-ed25519 … <handle>@jive.sh`) every time |
-| `ssh:publicKey({ sessionToken })` | query | The public key, or null before `createKey` |
+| `ssh:publicKey({ sessionToken })` | query | The account's OpenSSH public key, `{ publicKey: "ssh-ed25519 … <handle>@jive.sh" }` |
 | `ssh:sign({ sessionToken, data })` | action | Signs `data` (bytes) and returns `signature` (bytes) in SSH's encoding, `string "ssh-ed25519" \|\| string <64-byte signature>` |
 
 `sign` returns exactly what an SSH agent puts in `SSH_AGENT_SIGN_RESPONSE`, and never reads `data`, so a local agent
@@ -188,9 +187,8 @@ answers `ready`.
 
 ## Records
 
-`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `sshKeys`, `pipelineSessions`,
-`signInRequests`, `organizations`, `connectionRequests`, `codeRepositories`, `resourceImplementations`. `sshKeys` is
-the pre-component copy, dropped once `ssh:migrateToAccountKeys` has run on production and the counts match. Other
+`convex/schema.ts`: `accounts`, `passkeys`, `webAuthnChallenges`, `sessions`, `pipelineSessions`,
+`signInRequests`, `organizations`, `connectionRequests`, `codeRepositories`, `resourceImplementations`. Other
 components hold the rest:
 - `accountKeys` holds SSH keys, npm connections and signing passkeys.
 - The npm connector holds each provisioned package and its claims.

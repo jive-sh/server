@@ -8,6 +8,7 @@ import { allowedOrigins } from "./model/androidApps";
 import { usernameFor } from "./model/naming";
 import { insertAccountSession, resolveSession } from "./model/sessions";
 import { approveSignInRequest } from "./model/signInRequests";
+import { ensureAccountKey } from "./ssh";
 import { SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
 import {
   authenticationOptions,
@@ -78,12 +79,14 @@ export const register = action({
     const expectedOrigins = await run(allowedOrigins({ relyingParty: party, response }));
     const passkey = await run(verifyRegistration({ relyingParty: party, expectedOrigins, challenge, response: response as RegistrationResponseJSON }));
     const sessionToken = mintSecret(SESSION_TOKEN_PREFIX);
-    const { expiresAt } = await ctx.runMutation(internal.auth.createAccount, {
+    const { expiresAt, accountId } = await ctx.runMutation(internal.auth.createAccount, {
       ...spent.registration,
       ...passkey,
       tokenHash: await sha256Hex(sessionToken),
       signInRequestId,
     });
+    // Every account has its SSH key from sign-up; nobody creates one later (Alex, 2026-11-01).
+    await ensureAccountKey(ctx, { accountId, username: spent.registration.username });
     return { sessionToken, expiresAt, username: spent.registration.username };
   },
 });
@@ -278,7 +281,7 @@ export const createAccount = internalMutation({
     tokenHash: v.string(),
     signInRequestId: v.optional(v.string()),
   },
-  returns: v.object({ expiresAt: v.number() }),
+  returns: v.object({ expiresAt: v.number(), accountId: v.id("accounts") }),
   handler: async (ctx, { webAuthnUserId, username, credentialId, publicKey, tokenHash, signInRequestId }) => {
     if (await ctx.db.query("accounts").withIndex("by_username", (q) => q.eq("username", username)).first() !== null) {
       throw new ConvexError(`The handle ${username} was taken meanwhile. Try again.`);
@@ -289,7 +292,8 @@ export const createAccount = internalMutation({
     const now = Date.now();
     const accountId = await ctx.db.insert("accounts", { username, webAuthnUserId, createdAt: now });
     await ctx.db.insert("passkeys", { accountId, credentialId, publicKey, createdAt: now });
-    return await insertSession(ctx, { accountId, tokenHash, signInRequestId });
+    const { expiresAt } = await insertSession(ctx, { accountId, tokenHash, signInRequestId });
+    return { expiresAt, accountId };
   },
 });
 

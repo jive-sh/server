@@ -56,20 +56,6 @@ export default defineSchema({
   }).index("by_token_hash", ["tokenHash"]).index("by_account", ["accountId"]),
 
   /**
-   * An account's SSH key written before the key lived in the accountKeys component. The deploy runs
-   * `ssh:migrateToAccountKeys` and copies each row, still sealed, under the same account and the same public key.
-   * `ssh:createKey` copies that account's row before it would mint. This table stays until a later commit, after
-   * that copy has run on production and the counts match.
-   */
-  sshKeys: defineTable({
-    accountId: v.id("accounts"),
-    publicKey: v.string(),
-    sealedPrivateKey: v.string(),
-    keyVersion: v.number(),
-    createdAt: v.number(),
-  }).index("by_account", ["accountId"]),
-
-  /**
    * A code repository's pipeline session, opened by exchanging a deploy job's GitHub Actions ID token
    * (`pipelineSessions:signIn`). A table of its own because it acts as a code repository, not a person: it holds no
    * account, and carries the job's checked claims that provisioning acts on. Only the token's SHA-256 is stored;

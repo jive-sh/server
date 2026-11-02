@@ -260,32 +260,6 @@ export type DataModel = {
     searchIndexes: {};
     vectorIndexes: {};
   };
-  sshKeys: {
-    document: {
-      accountId: Id<"accounts">;
-      createdAt: number;
-      keyVersion: number;
-      publicKey: string;
-      sealedPrivateKey: string;
-      _id: Id<"sshKeys">;
-      _creationTime: number;
-    };
-    fieldPaths:
-      | "_creationTime"
-      | "_id"
-      | "accountId"
-      | "createdAt"
-      | "keyVersion"
-      | "publicKey"
-      | "sealedPrivateKey";
-    indexes: {
-      by_id: ["_id"];
-      by_creation_time: ["_creationTime"];
-      by_account: ["accountId", "_creationTime"];
-    };
-    searchIndexes: {};
-    vectorIndexes: {};
-  };
   webAuthnChallenges: {
     document: {
       accountId?: Id<"accounts">;
