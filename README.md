@@ -20,7 +20,7 @@ jive mints a token and hands it off to a compute provider running an agent workf
 
 | Way in | Session | Opened by | Lasts |
 | --- | --- | --- | --- |
-| A person's passkey | A person's (`sessions`) | `auth:register`, `auth:signIn`, or `signInRequests:claim` for a program whose request a passkey approved | 12 hours, revocable with `sessions:signOut` |
+| A person's passkey | A person's (`sessions`) | `auth:register`, `auth:signIn`, or `signInRequests:claim` for a program whose request a passkey approved | A day after its last use (below), revocable with `sessions:signOut` |
 | A deploy job's GitHub Actions ID token | A code repository's pipeline (`pipelineSessions`) | `pipelineSessions:signIn` (below) | 1 hour, deleted when it expires |
 
 The third, a session Jive mints for a compute provider running an agent workflow, waits on the compute resource kind.
@@ -29,6 +29,18 @@ Each table has one function that writes it, `insertAccountSession` (`convex/mode
 `convex/` inserts a session or calls either from anywhere but the check before it. A function that acts for a person
 starts with `resolveSession`, one that acts for a pipeline with `resolvePipelineSession`; neither accepts the other's
 token.
+
+**A person's session lasts a day after its last use** (Alex, 2026-11-06: "Let's do session length of a day and then
+the each use you talked about extends the expiry to a day after that moment of use"). It ends a day after sign-in, and
+every mutation or action that acts with it moves its end to a day after that call: each `ssh:sign` (every commit
+signature, push and SSH login through jive's agent), `auth:addPasskeyOptions`, `auth:addPasskey` and
+`approvalDevices:enable` and `:disable`. They start with `resolveAndExtendSession` (`convex/model/sessions.ts`).
+Queries (`ssh:publicKey`, `accounts:me`, `approvalDevices:list`) cannot write in Convex, so they check the session
+without moving its end. There is no upper limit: a session used at least once a day never ends, until it is signed
+out. The end a client got at sign-in goes stale with the first use, so `accounts:me` returns the current one as
+`sessionExpiresAt`. Pipeline sessions keep their fixed hour. `test/end-to-end.test.ts` runs the rule with the
+rest of the path: passkey sign-up, the key, a program's sign-in, `ssh:publicKey`, `ssh:sign` checked by
+`ssh-keygen -Y verify`, the end moving, and an ended session refused.
 
 Passkeys use relying party `jive.sh`, so a passkey made on any `*.jive.sh` page (skill-sync's included) works. Two
 kinds of origin are accepted: `https://${WEBSITE_DOMAIN}` (`convex/model/webAuthn.ts`), and an Android app's
@@ -44,7 +56,7 @@ its account and passkey.
 | `auth:registrationOptions`, `auth:register` | actions | Create an account (handle derived from a random WebAuthn user id) and its passkey; opens a session |
 | `auth:signInOptions`, `auth:signIn` | actions | Usernameless sign-in with any registered passkey; opens a session |
 | `auth:addPasskeyOptions`, `auth:addPasskey` | actions | Add a passkey to the signed-in account, with its own WebAuthn user handle, its existing passkeys excluded (a phone whose platform does not sync the account's passkey) |
-| `accounts:me` | query | The session's account and passkeys, or null |
+| `accounts:me` | query | The session's account and passkeys, and when the session ends (`sessionExpiresAt`), or null |
 | `sessions:signOut` | mutation | Revokes the presented session |
 | `signInRequests:open`, `:describe`, `:claim` | action, query, action | Sign a program in (below) |
 | `approvalDevices:enable`, `:disable`, `:list` | mutation, mutation, query | Turn phone approval on or off for a phone's Expo push token, and list the account's phones (below) |
@@ -91,7 +103,8 @@ create keys. You can fetch the public key or sign". Each account has exactly one
 holding no key forwards each sign request's data as it arrives: the SSHSIG blob `ssh-keygen -Y sign` builds for a
 git commit, or the session-bound blob of an SSH authentication. The public key goes on GitHub as both an
 authentication key and a signing key. The agent signs in once through a sign-in request (above) and calls `sign`
-with its session token; a revoked or expired session signs nothing.
+with its session token; a revoked or expired session signs nothing, and each signature moves the session's end to a
+day later.
 
 ## The organization's npm connection
 

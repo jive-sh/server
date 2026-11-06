@@ -6,7 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, type MutationCtx } from "./_generated/server";
 import { allowedOrigins } from "./model/androidApps";
 import { usernameFor } from "./model/naming";
-import { insertAccountSession, resolveSession } from "./model/sessions";
+import { insertAccountSession, resolveAndExtendSession } from "./model/sessions";
 import { approveSignInRequest } from "./model/signInRequests";
 import { ensureAccountKey } from "./ssh";
 import { SESSION_TOKEN_PREFIX, mintSecret, sha256Hex } from "./model/tokens";
@@ -136,7 +136,7 @@ export const addPasskeyOptions = action({
   returns: v.object({ options: v.any() }),
   handler: async (ctx, { sessionToken }) => {
     const party = await relyingParty();
-    const account = await ctx.runQuery(internal.auth.accountOfSession, { sessionToken });
+    const account = await ctx.runMutation(internal.auth.accountOfSession, { sessionToken });
     if (account === null) throw new ConvexError("Sign in again: this session has expired or was signed out.");
     const challenge = mintSecret("");
     await ctx.runMutation(internal.auth.storeChallenge, { challengeHash: await sha256Hex(challenge), purpose: "addPasskey", accountId: account.accountId });
@@ -160,7 +160,7 @@ export const addPasskey = action({
     const party = await relyingParty();
     const spent = await ctx.runMutation(internal.auth.spendChallenge, { challengeHash: await sha256Hex(challenge), purpose: "addPasskey" });
     if (spent === null || spent.accountId === undefined) throw new ConvexError("This passkey prompt expired. Try again.");
-    const account = await ctx.runQuery(internal.auth.accountOfSession, { sessionToken });
+    const account = await ctx.runMutation(internal.auth.accountOfSession, { sessionToken });
     // The options were issued to one account; a different or ended session cannot spend them.
     if (account === null || account.accountId !== spent.accountId) throw new ConvexError("Sign in again: this session has expired or was signed out.");
     const expectedOrigins = await run(allowedOrigins({ relyingParty: party, response }));
@@ -170,7 +170,8 @@ export const addPasskey = action({
   },
 });
 
-export const accountOfSession = internalQuery({
+/** The session's account, extending the session; null when it is not live. */
+export const accountOfSession = internalMutation({
   args: { sessionToken: v.string() },
   returns: v.union(v.null(), v.object({
     accountId: v.id("accounts"),
@@ -179,7 +180,7 @@ export const accountOfSession = internalQuery({
     credentialIds: v.array(v.string()),
   })),
   handler: async (ctx, { sessionToken }) => {
-    const session = await resolveSession(ctx.db, sessionToken);
+    const session = await resolveAndExtendSession(ctx.db, sessionToken);
     const account = session === null ? null : await ctx.db.get(session.accountId);
     if (account === null) return null;
     const passkeys = await ctx.db.query("passkeys").withIndex("by_account", (q) => q.eq("accountId", account._id)).collect();

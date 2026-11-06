@@ -2,7 +2,7 @@
   "$schema": "./package.schema.json",
   "name": "@jive-sh/server",
   "description": "Jive's central server: the Convex backend that holds accounts, passkeys and sessions, organizations, code repositories, connections and packages; people sign in with jive.sh passkeys, programs through sign-in requests, and pipelines provision packages with their GitHub Actions ID token.",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "license": "MIT",
   "type": "module",
   "scripts": {

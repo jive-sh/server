@@ -1,15 +1,16 @@
 import { ConvexError, v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { action, internalAction, internalQuery, query, type ActionCtx } from "./_generated/server";
-import { resolveSession } from "./model/sessions";
+import { action, internalAction, internalMutation, internalQuery, query, type ActionCtx } from "./_generated/server";
+import { resolveAndExtendSession, resolveSession } from "./model/sessions";
 
 /**
  * Signing with the account's SSH key on the server (Alex, 2026-11-01: "There's just an ssh sign request. You don't
  * create keys. You can fetch the public key or sign"). The public API is `publicKey` and `sign`. Every account has its
  * key from sign-up (`ensureAccountKey`, called by `auth:register`), and the deploy gives one to any account without
  * (`afterDeploy`). The key is held by the accountKeys component; these functions check the session, then call it.
- * Every call resolves the session first, so a revoked or expired session signs nothing.
+ * Every call resolves the session first, so a revoked or expired session signs nothing, and each signature is a use
+ * of the session that extends it (`resolveAndExtendSession`).
  */
 
 const NOT_SIGNED_IN = "The session token opens no live session. Sign in again.";
@@ -36,18 +37,18 @@ export const sign = action({
   args: { sessionToken: v.string(), data: v.bytes() },
   returns: v.object({ signature: v.bytes() }),
   handler: async (ctx, { sessionToken, data }) => {
-    const session = await ctx.runQuery(internal.ssh.caller, { sessionToken });
+    const session = await ctx.runMutation(internal.ssh.caller, { sessionToken });
     if (session === null) throw new ConvexError(NOT_SIGNED_IN);
     return await ctx.runAction(components.accountKeys.ssh.sign, { accountId: session.accountId, data });
   },
 });
 
-/** Who the session belongs to; null when the session is not live. */
-export const caller = internalQuery({
+/** Who the session belongs to, extending it; null when the session is not live. */
+export const caller = internalMutation({
   args: { sessionToken: v.string() },
   returns: v.union(v.null(), v.object({ accountId: v.id("accounts"), username: v.string() })),
   handler: async (ctx, { sessionToken }) => {
-    const session = await resolveSession(ctx.db, sessionToken);
+    const session = await resolveAndExtendSession(ctx.db, sessionToken);
     const account = session === null ? null : await ctx.db.get(session.accountId);
     if (account === null) return null;
     return { accountId: account._id, username: account.username };

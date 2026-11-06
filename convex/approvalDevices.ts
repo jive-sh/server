@@ -3,8 +3,8 @@ import { Effect, Schema, pipe } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { internalAction, internalMutation, internalQuery, mutation, query, type DatabaseReader } from "./_generated/server";
-import { resolveSession } from "./model/sessions";
+import { internalAction, internalMutation, internalQuery, mutation, query, type DatabaseWriter } from "./_generated/server";
+import { resolveAndExtendSession, resolveSession } from "./model/sessions";
 
 /**
  * Phone approval (Alex, 2026-11-01: "once an account is registered someone can enable phone approval such that
@@ -27,8 +27,8 @@ export const SIGN_IN_REQUEST_CHANNEL = "sign-in-requests";
 
 const device = v.object({ expoPushToken: v.string(), label: v.string(), createdAt: v.number() });
 
-async function accountOf(db: DatabaseReader, sessionToken: string): Promise<Id<"accounts">> {
-  const session = await resolveSession(db, sessionToken);
+async function accountOf(db: DatabaseWriter, sessionToken: string): Promise<Id<"accounts">> {
+  const session = await resolveAndExtendSession(db, sessionToken);
   if (session === null) throw new ConvexError("Sign in again: this session has expired or was signed out.");
   return session.accountId;
 }

@@ -8,3 +8,9 @@ package.schema.json
 
 # Files the SSH signing test hands ssh-keygen; deleted after each run
 .test-ssh
+
+# Files the end-to-end test hands ssh-keygen and convex import; deleted after each run
+.test-end-to-end
+
+# HOME for test and CLI runs on a developer machine, so nothing reaches their real home folder
+.test-home

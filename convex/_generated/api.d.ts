@@ -28,6 +28,7 @@ export declare const api: {
       null | {
         createdAt: number;
         passkeys: Array<{ createdAt: number; credentialId: string }>;
+        sessionExpiresAt: number;
         username: string;
       }
     >;
@@ -256,7 +257,7 @@ export declare const internal: {
   };
   auth: {
     accountOfSession: FunctionReference<
-      "query",
+      "mutation",
       "internal",
       { sessionToken: string },
       null | {
@@ -490,7 +491,7 @@ export declare const internal: {
       { accounts: number; created: number }
     >;
     caller: FunctionReference<
-      "query",
+      "mutation",
       "internal",
       { sessionToken: string },
       null | { accountId: Id<"accounts">; username: string }
